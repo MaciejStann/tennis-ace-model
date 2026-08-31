@@ -1,0 +1,22 @@
+# Klucze API — NIGDY nie commitować
+api_key.txt
+api_keys.txt
+.streamlit/secrets.toml
+
+# Surowe pliki źródłowe TML (odtwarzalne przez build_db.py)
+data/tml*.csv
+
+# Stan lokalny
+data/updated.json
+data/player_ids.json
+
+__pycache__/
+*.pyc
+.venv/
+venv/
+.DS_Store
+
+*.zip
+*_export.csv
+data/matches.csv
+/meta.json

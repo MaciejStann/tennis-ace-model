@@ -1,0 +1,15 @@
+# Paleta inspirowana Australian Open: kort w błękicie, ciepły akcent.
+[theme]
+base = "light"
+primaryColor = "#2E7FD4"
+backgroundColor = "#F8FAFC"
+secondaryBackgroundColor = "#EAF1F8"
+textColor = "#16202B"
+font = "sans serif"
+
+[client]
+toolbarMode = "minimal"
+showErrorDetails = true
+
+[browser]
+gatherUsageStats = false
