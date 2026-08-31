@@ -219,6 +219,10 @@ DEFAULTS = {
     "view": "list", "picked": None, "ctx": {}, "namecache": {},
     "fx_days": 2, "fx_token": 0,
     "hide_low": True, "both_only": False, "newest": False,
+    # klucze ustawiane w trakcie nawigacji — deklarujemy je tutaj, żeby
+    # `.get()` w losowym miejscu nie trafiał na brak
+    "origin": "fixtures", "match_key": "", "dark_mode": False,
+    "list_mode": "Terminarz ATP",
 }
 for k, v in DEFAULTS.items():
     st.session_state.setdefault(k, v)
@@ -286,9 +290,20 @@ def open_match(name1: str, name2: str, ctx: dict | None = None,
 # =============================================================== widok listy
 
 @st.cache_data(ttl=3600, show_spinner="Pobieram terminarz…")
-def get_events(days: int, token: int):
-    """token wymusza odświeżenie tylko po kliknięciu przycisku."""
+def _fetch_cached(days: int, token: int):
     return fetch_events(days_ahead=days, tours=("atp",))
+
+
+def get_events(days: int, token: int):
+    """
+    Cache'ujemy WYŁĄCZNIE udane pobranie. Wcześniej pusty wynik (wyczerpany
+    limit dzienny) siedział w cache przez godzinę — po odnowieniu limitu
+    aplikacja nadal pokazywała błąd, choć API już działało.
+    """
+    events, msg = _fetch_cached(days, token)
+    if not events:
+        _fetch_cached.clear()
+    return events, msg
 
 
 def go_back():

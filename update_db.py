@@ -23,6 +23,7 @@ import time
 
 import pandas as pd
 import requests
+from datetime import date, timedelta
 from urllib.parse import quote
 
 from fixtures import HOST, get_key
@@ -442,7 +443,12 @@ def flush(new_rows: list[dict]) -> int:
         return 0
     path = DATA / "matches_slim.csv"
     old = pd.read_csv(path)
-    key = ["player", "opp", "tourney_date"]
+    # UWAGA: (player, opp, tourney_date) NIE jest unikalne — w TML
+    # tourney_date to data rozpoczecia turnieju, wiec dwa spotkania tej samej
+    # pary w jednym turnieju maja ten sam klucz. Dokladamy wynik i rundy,
+    # inaczej deduplikacja skasowalaby prawdziwy mecz.
+    key = [c for c in ["player", "opp", "tourney_date", "score", "round"]
+           if c in old.columns and c in new.columns]
     # ile z pobranych meczow to faktycznie NOWE wiersze
     existing = set(map(tuple, old[key].astype(str).values))
     fresh = sum(1 for r in new[key].astype(str).values
@@ -453,11 +459,28 @@ def flush(new_rows: list[dict]) -> int:
     return fresh
 
 
-def update(api: Api, top: int, years: list[int], tour="atp"):
+def update(api: Api, top: int, years: list[int], tour="atp",
+           active_days: int = 400):
     existing = pd.read_csv(DATA / "players.csv", index_col=0)
-    # najpierw zawodnicy z najwieksza liczba meczow — najbardziej nas obchodza
-    targets = list(existing.sort_values("matches", ascending=False).index[:top])
-    print(f"Aktualizuje {len(targets)} zawodnikow (szukanie ID po nazwisku)\n")
+
+    # Odsiewamy zawodnikow, ktorzy dawno nie grali. Sortowanie po liczbie
+    # meczow stawia wysoko emerytow (Nadal, Thiem, Schwartzman) — maja setki
+    # wystepow w historii, ale nie zagraja juz nigdy, wiec kazde zapytanie
+    # o nich to zmarnowana kwota.
+    slim = pd.read_csv(DATA / "matches_slim.csv")
+    last_seen = slim.groupby("player").tourney_date.max()
+    cutoff = int((date.today() - timedelta(days=active_days)).strftime("%Y%m%d"))
+    existing["last_match"] = last_seen
+    active = existing[existing.last_match.fillna(0) >= cutoff]
+    dropped = len(existing) - len(active)
+
+    targets = list(active.sort_values("matches", ascending=False).index[:top])
+    print(f"Pomijam {dropped} zawodnikow bez meczu od {cutoff} "
+          f"(ostatnie {active_days} dni)")
+    if dropped and len(existing) - len(active) < 40:
+        skipped = existing[existing.last_match.fillna(0) < cutoff]
+        print("  np.: " + ", ".join(list(skipped.index[:5])))
+    print(f"Aktualizuje {len(targets)} zawodnikow\n")
 
     cache = load_cache()
     done_path = DATA / "updated.json"
@@ -537,6 +560,9 @@ if __name__ == "__main__":
     ap.add_argument("--inspect", metavar="NAME")
     ap.add_argument("--top", type=int, default=150)
     ap.add_argument("--years", default="2026")
+    ap.add_argument("--active-days", type=int, default=400,
+                    help="pomin zawodnikow bez meczu od tylu dni "
+                         "(domyslnie 400 — odsiewa emerytow)")
     ap.add_argument("--debug", action="store_true",
                     help="pokaz surowa odpowiedz gdy nic nie sparsowano")
     args = ap.parse_args()
@@ -551,4 +577,5 @@ if __name__ == "__main__":
     if args.inspect:
         inspect(api, args.inspect)
     else:
-        update(api, args.top, [int(y) for y in args.years.split(",")])
+        update(api, args.top, [int(y) for y in args.years.split(",")],
+               active_days=args.active_days)

@@ -14,9 +14,16 @@ YEARS = range(2019, 2027)
 DATA = pathlib.Path(__file__).parent / "data"
 DATA.mkdir(exist_ok=True)
 
-# ile punktow serwisowych "sztucznych" dociagamy do sredniej tourowej.
+# Ile punktow serwisowych "sztucznych" dociagamy do sredniej tourowej.
 # Wieksze K = mocniejsze sciaganie malych prob do sredniej.
-SHRINK_SVPT = 400.0
+#
+# K=800 dobrane pod KALIBRACJE prawdopodobienstw (log loss), nie pod MAE.
+# Test out-of-sample (trening <2025, test >=2025), linia floor(mu)+0.5:
+#   K=400: log loss 0.6878, MAE 2.644   <- poprzednia wartosc
+#   K=800: log loss 0.6843, MAE 2.648   <- obecna
+#   K=3200: log loss 0.6838, MAE 2.755  <- log loss stoi, MAE sie psuje
+# Powyzej 800 zysk w kalibracji znika, a blad punktowy rosnie.
+SHRINK_SVPT = 800.0
 
 
 def download() -> pd.DataFrame:

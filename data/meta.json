@@ -1,32 +1,32 @@
 {
   "avg_games": {
     "3": {
-      "_all": 22.8,
-      "Hard": 22.8,
+      "_all": 22.9,
+      "Hard": 22.9,
       "Clay": 22.6,
       "Grass": 23.7
     },
     "5": {
-      "_all": 35.7,
+      "_all": 35.6,
       "Hard": 35.5,
-      "Clay": 35.0,
-      "Grass": 36.9
+      "Clay": 34.9,
+      "Grass": 36.8
     }
   },
-  "tour_ace_pct": 0.07885566513409102,
-  "tour_df_pct": 0.03567969279034484,
-  "pts_per_service_game": 6.374491425689308,
+  "tour_ace_pct": 0.07896991450524873,
+  "tour_df_pct": 0.03563923946260442,
+  "pts_per_service_game": 6.370551543007222,
   "surface_mult": {
-    "Clay": 0.6616976633847339,
-    "Grass": 1.2142950002403101,
-    "Hard": 1.1253853769718183
+    "Clay": 0.6647037768679744,
+    "Grass": 1.2161812041600022,
+    "Hard": 1.1254501916829018
   },
-  "indoor_mult": 1.0470673793418264,
-  "shrink_svpt": 400.0,
-  "n_matches": 18804,
+  "indoor_mult": 1.047353235620474,
+  "shrink_svpt": 800.0,
+  "n_matches": 19259,
   "years": [
     2018,
     2026
   ],
-  "last_match_date": 20260827
+  "last_match_date": 20260828
 }

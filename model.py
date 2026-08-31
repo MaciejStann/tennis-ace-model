@@ -26,6 +26,7 @@ def load():
             calib = {}
     # domyslne, gdy calibrate.py nie byl jeszcze uruchomiony
     calib.setdefault("calib_c", 1.0)
+    calib.setdefault("calib_c_df", 1.0)
     calib.setdefault("nb_r", 26.0)
     calib.setdefault("form", {})
     matches_path = DATA / "matches_slim.csv"
@@ -100,6 +101,17 @@ def match_name(query: str, index: list[str], cache: dict) -> tuple[str | None, f
 
 # --------------------------------------------------------- estymacja
 
+def _int0(v) -> int:
+    """NaN/None -> 0. Wielu zawodnikow nie ma ani jednego meczu na danej
+    nawierzchni (55% nie gralo na trawie), wiec int(NaN) wywalalby aplikacje."""
+    try:
+        if v is None or pd.isna(v):
+            return 0
+        return int(v)
+    except (TypeError, ValueError):
+        return 0
+
+
 def player_rates(players, meta, name: str, surface: str) -> dict:
     """Zwraca stawki zawodnika albo known=False bez zadnych liczb.
 
@@ -117,7 +129,7 @@ def player_rates(players, meta, name: str, surface: str) -> dict:
     return {
         "ace": float(ace), "df": float(row["df_pct"]),
         "n": int(row["matches"]),
-        "n_surf": int(row.get(f"n_{surface.lower()}", 0) or 0),
+        "n_surf": _int0(row.get(f"n_{surface.lower()}")),
         "known": True,
         "ace_overall": float(row["ace_pct"]),
         "df_overall": float(row["df_pct"]),
@@ -198,7 +210,7 @@ def estimate(players, meta, calib, server: str, returner: str,
         "mu_ace": ace_rate * rm * ind * svpt * calib["calib_c"],
         # DF zalezy od serwujacego, nie od returnera — returner nie wplywa
         # na to, czy przeciwnik wrzuci druga podanie w siatke.
-        "mu_df": df_rate * svpt,
+        "mu_df": df_rate * svpt * calib.get("calib_c_df", 1.0),
         "ret_mult": rm, "ret_n": rn, "indoor_mult": ind, "svpt": svpt,
         "form": form_info, **s,
     }
@@ -216,9 +228,25 @@ def p_over(line: float, mu: float, r: float) -> float:
     return float(1 - stats.nbinom.cdf(np.floor(line), rr, p))
 
 
+MAX_STAKE_FRACTION = 0.10   # nigdy wiecej niz 10% bankrolla na zaklad
+
+
 def kelly(prob: float, odds: float, fraction: float) -> float:
+    """
+    Ulamkowy Kelly z twardym sufitem.
+
+    Model nigdy nie jest pewny — p_over dla skrajnie niskich linii zwraca
+    ~0.9999, co bez sufitu daje stawke rowna calemu ulamkowi bankrolla przy
+    zerowej faktycznej przewadze. Sufit chroni przed bledem modelu, nie
+    przed matematyka Kelly'ego.
+    """
+    if odds <= 1.0:
+        return 0.0
+    prob = min(max(float(prob), 0.0), 0.999)
     edge = prob * odds - 1
-    return max(0.0, fraction * edge / (odds - 1)) if edge > 0 else 0.0
+    if edge <= 0:
+        return 0.0
+    return min(fraction * edge / (odds - 1), MAX_STAKE_FRACTION)
 
 
 # --------------------------------------------------------- H2H
