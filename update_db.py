@@ -275,6 +275,19 @@ def all_players(api: Api, tour="atp", max_pages=40) -> dict[str, int]:
     return out
 
 
+def _kto_wygral(m: dict, pid: int | None, me: str) -> int:
+    """1 jesli nasz zawodnik wygral. Najpierw match_winner, potem wynik."""
+    mw = m.get("match_winner")
+    if mw is not None and pid is not None:
+        return 1 if mw == pid else 0
+    g = games_from_score(m.get("result", ""))
+    if not g:
+        return 0
+    # wynik jest z perspektywy zwyciezcy, czyli player1 w archiwum
+    zwyciezca_to_p1 = g[0] > g[1]
+    return 1 if (me == "player1") == zwyciezca_to_p1 else 0
+
+
 def games_from_score(result: str) -> tuple[int, int] | None:
     """
     "7-5 6-3" -> (13, 9) gemy player1/player2. Tiebreaki w nawiasach ignorujemy.
@@ -340,6 +353,12 @@ def parse_matches(payload, player: str, pid: int | None = None) -> list[dict]:
         if ace is None or not svpt:
             continue
 
+        # punkty wygrane przy serwisie — podstawa modelu punktowego.
+        # API podaje pary "wygrane / mozliwe"; nas interesuja wygrane.
+        sv_1won = num(mine.get("winningOnFirstServe"))
+        sv_2won = num(mine.get("winningOnSecondServe"))
+        sv_1in = num(mine.get("firstServe"))
+
         # gemy serwisowe z wyniku meczu
         games = games_from_score(m.get("result", ""))
         svgms = games[idx] if games else max(round(svpt / 6.4), 1)
@@ -379,8 +398,16 @@ def parse_matches(payload, player: str, pid: int | None = None) -> list[dict]:
             "tourney_name": str(tour_obj.get("name") or ""),
             "round": "",
             "score": str(m.get("result") or ""),
-            "won": 1 if (pid is not None
-                         and m.get("match_winner") == pid) else 0,
+            "sv_1in": sv_1in,
+            "sv_1won": sv_1won,
+            "sv_2won": sv_2won,
+            "bp_saved": None,
+            "bp_faced": None,
+            "rank": None,
+            "opp_rank": None,
+            # API nie zawsze zwraca match_winner — wtedy wnioskujemy
+            # z wyniku, ktory jest zapisany z perspektywy zwyciezcy.
+            "won": _kto_wygral(m, pid, me),
             "rank_name": rank_name,
         })
     return out

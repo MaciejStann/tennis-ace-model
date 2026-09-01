@@ -25,6 +25,14 @@ DATA.mkdir(exist_ok=True)
 # Powyzej 800 zysk w kalibracji znika, a blad punktowy rosnie.
 SHRINK_SVPT = 800.0
 
+# Osobne, slabsze sciaganie dla splitow nawierzchniowych.
+# 60% zawodnikow ma na danej nawierzchni mniej niz 800 punktow serwisowych,
+# wiec przy wspolnym K ich specyfika (np. slabszy serwis na maczce) ginela
+# w sredniej tourowej. Test out-of-sample, MAE:
+#   K_surf=100: 2.6495   400: 2.6339 <- najlepsze
+#   K_surf=200: 2.6365   800: 2.6481 (poprzednio, wspolne K)
+SHRINK_SURFACE = 400.0
+
 
 def download() -> pd.DataFrame:
     frames = []
@@ -48,15 +56,24 @@ def to_long(df: pd.DataFrame) -> pd.DataFrame:
 
     cols = ["surface", "indoor", "tourney_date", "best_of",
             "tourney_name", "round", "score"]
+    # punkty wygrane przy serwisie + ranking — podstawa modelu punktowego
+    SRV = {"1stIn": "sv_1in", "1stWon": "sv_1won", "2ndWon": "sv_2won",
+           "bpSaved": "bp_saved", "bpFaced": "bp_faced"}
     win = df.rename(columns={
         "winner_name": "player", "loser_name": "opp",
         "w_ace": "ace", "w_df": "df", "w_svpt": "svpt", "w_SvGms": "svgms",
-    })[["player", "opp", "ace", "df", "svpt", "svgms"] + cols]
+        **{f"w_{k}": v for k, v in SRV.items()},
+        "winner_rank": "rank", "loser_rank": "opp_rank",
+    })[["player", "opp", "ace", "df", "svpt", "svgms",
+        *SRV.values(), "rank", "opp_rank"] + cols]
     win["won"] = 1
     los = df.rename(columns={
         "loser_name": "player", "winner_name": "opp",
         "l_ace": "ace", "l_df": "df", "l_svpt": "svpt", "l_SvGms": "svgms",
-    })[["player", "opp", "ace", "df", "svpt", "svgms"] + cols]
+        **{f"l_{k}": v for k, v in SRV.items()},
+        "loser_rank": "rank", "winner_rank": "opp_rank",
+    })[["player", "opp", "ace", "df", "svpt", "svgms",
+        *SRV.values(), "rank", "opp_rank"] + cols]
     los["won"] = 0
 
     long = pd.concat([win, los], ignore_index=True)
@@ -119,7 +136,8 @@ def build(long: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
             a=("ace", "sum"), s=("svpt", "sum")
         )
         prior_rate = tour_ace * surf_mult.get(surface, 1.0)
-        rate = shrink(sub.a, sub.s, prior_rate)
+        rate = ((sub.a + SHRINK_SURFACE * prior_rate)
+                / (sub.s + SHRINK_SURFACE))
         srv[f"ace_{surface.lower()}"] = rate
         srv[f"n_{surface.lower()}"] = sub.s
 
@@ -162,7 +180,9 @@ if __name__ == "__main__":
     players.to_csv(DATA / "players.csv")
     slim = long[["player", "opp", "surface", "indoor", "tourney_date",
                  "best_of", "ace", "df", "svpt", "svgms",
-                 "tourney_name", "round", "score", "won"]]
+                 "tourney_name", "round", "score", "won",
+                 "sv_1in", "sv_1won", "sv_2won", "bp_saved", "bp_faced",
+                 "rank", "opp_rank"]]
     slim.to_csv(DATA / "matches_slim.csv", index=False)
     (DATA / "meta.json").write_text(json.dumps(meta, indent=2))
 

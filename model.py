@@ -14,6 +14,17 @@ from scipy import stats
 DATA = pathlib.Path(__file__).parent / "data"
 
 
+def load_point_rates(matches):
+    """Stawki punktowe do modelu meczu. None, gdy brak kolumn serwisowych."""
+    if matches is None or "sv_1won" not in matches.columns:
+        return None, None
+    try:
+        import pointmodel as PM
+        return PM.build_serve_rates(matches)
+    except Exception:
+        return None, None
+
+
 def load():
     players = pd.read_csv(DATA / "players.csv", index_col=0)
     meta = json.loads((DATA / "meta.json").read_text())

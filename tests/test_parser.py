@@ -18,8 +18,12 @@ def mecz(pid_p1, pid_p2, ace1, ace2, **kw):
         "tournament": {"name": "Test", "court": {"name": "Hard"},
                        "rank": {"name": "Main tour"}},
         "stats": {
-            "player1": {"aces": ace1, "doubleFaults": 3, "firstServeOf": 66},
-            "player2": {"aces": ace2, "doubleFaults": 4, "firstServeOf": 57},
+            "player1": {"aces": ace1, "doubleFaults": 3, "firstServeOf": 66,
+                        "firstServe": 36, "winningOnFirstServe": 31,
+                        "winningOnSecondServe": 17},
+            "player2": {"aces": ace2, "doubleFaults": 4, "firstServeOf": 57,
+                        "firstServe": 25, "winningOnFirstServe": 18,
+                        "winningOnSecondServe": 20},
         },
     }
     d.update(kw)
@@ -71,6 +75,32 @@ class TestPolaMeczu:
         m["data"][0]["match_winner"] = 100
         r = U.parse_matches(m, "Gracz A", 100)
         assert r[0]["won"] == 1
+
+
+class TestPunktySerwisowe:
+    """Podstawa modelu punktowego: p_serve = (1stWon + 2ndWon) / svpt."""
+
+    def test_czyta_punkty_wygrane(self):
+        r = U.parse_matches(mecz(100, 200, 8, 10), "Gracz A", 100)[0]
+        assert r["sv_1won"] == 31
+        assert r["sv_2won"] == 17
+
+    def test_p_serve_wychodzi_sensownie(self):
+        r = U.parse_matches(mecz(100, 200, 8, 10), "Gracz A", 100)[0]
+        p = (r["sv_1won"] + r["sv_2won"]) / r["svpt"]
+        assert 0.30 < p < 0.95
+
+    def test_bierze_z_wlasciwego_zawodnika(self):
+        """Gdy nasz gracz jest player2, punkty muszą być jego."""
+        r = U.parse_matches(mecz(200, 100, 8, 10), "Gracz B", 100)[0]
+        assert r["sv_1won"] == 18
+        assert r["sv_2won"] == 20
+
+    def test_brak_pol_nie_wywala(self):
+        m = mecz(100, 200, 8, 10)
+        del m["data"][0]["stats"]["player1"]["winningOnFirstServe"]
+        r = U.parse_matches(m, "Gracz A", 100)
+        assert r and r[0]["sv_1won"] is None
 
 
 class TestOdpornosc:

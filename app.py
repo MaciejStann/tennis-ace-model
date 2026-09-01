@@ -205,6 +205,11 @@ def load_all():
     return M.load()
 
 
+@st.cache_data(show_spinner="Przygotowuję model meczu…")
+def load_point():
+    return M.load_point_rates(MATCHES)
+
+
 try:
     PLAYERS, META, CALIB, MATCHES = load_all()
 except FileNotFoundError:
@@ -853,6 +858,108 @@ def stat_tab(kind: str, p1: str, p2: str, e1: dict, e2: dict, cfg: dict,
                            "pomogłaby na twoich danych.")
 
 
+def match_tab(p1: str, p2: str, cfg: dict, mkey: str):
+    """Przebieg meczu: zwyciezca, wynik w setach, tie-breaki, gemy."""
+    import pointmodel as PM
+
+    rates, pmeta = load_point()
+    if rates is None:
+        st.info("Brak danych o punktach serwisowych. Uruchom:")
+        st.code("python migrate_serve.py\npython rebuild_from_slim.py",
+                language="powershell")
+        return
+
+    ps1 = PM.effective_p_serve(rates, pmeta, p1, p2, cfg["surface"])
+    ps2 = PM.effective_p_serve(rates, pmeta, p2, p1, cfg["surface"])
+    if ps1 is None or ps2 is None:
+        brak = [n for n, v in ((p1, ps1), (p2, ps2)) if v is None]
+        st.error(f"Brak danych punktowych dla: {', '.join(brak)}.")
+        return
+
+    o = PM.match_outcome(ps1, ps2, cfg["best_of"])
+    pw1, pw2 = o["p_win"], 1 - o["p_win"]
+
+    st.markdown("<div class='eyebrow' style='margin-top:.4rem'>"
+                "Kto wygra</div>", unsafe_allow_html=True)
+    c = st.columns(2, gap="medium")
+    for col, nm, pw in zip(c, (p1, p2), (pw1, pw2)):
+        col.metric(nm.split()[-1], f"{100 * pw:.0f}%")
+
+    st.markdown(
+        f"<div class='sub'>Z prawdopodobieństwa wygrania punktu przy serwisie "
+        f"({p1.split()[-1]} {100 * ps1:.1f}%, {p2.split()[-1]} "
+        f"{100 * ps2:.1f}%) wynika reszta: utrzymanie podania, set, mecz."
+        f"</div>", unsafe_allow_html=True)
+
+    # --- wycena rynku 1/2 ---
+    st.markdown("<div class='eyebrow'>Wycena zwycięzcy</div>",
+                unsafe_allow_html=True)
+    k = st.columns(2, gap="medium")
+    o1 = k[0].number_input(f"Kurs na {p1.split()[-1]}", 1.01, 30.0, 1.90, 0.01,
+                           key=f"w1_{mkey}", format="%.2f")
+    o2 = k[1].number_input(f"Kurs na {p2.split()[-1]}", 1.01, 30.0, 1.90, 0.01,
+                           key=f"w2_{mkey}", format="%.2f")
+    devig = 1 / o1 + 1 / o2
+    rows = []
+    for nm, pw, od in ((p1, pw1, o1), (p2, pw2, o2)):
+        ev = pw * od - 1
+        rows.append({"Zawodnik": nm, "Model": f"{100 * pw:.0f}%",
+                     "Rynek": f"{100 / od / devig:.0f}%", "Kurs": f"{od:.2f}",
+                     "EV": f"{100 * ev:+.1f}%"})
+    st.dataframe(pd.DataFrame(rows), hide_index=True,
+                 use_container_width=True)
+    st.markdown(
+        f"<div class='sub'>Marża {100 * (devig - 1):.1f}%. "
+        f"<b>Rynek 1/2 jest wyceniany sprawnie</b> — model rzadko znajdzie "
+        f"tu przewagę i traktuj każdą dużą różnicę z rezerwą.</div>",
+        unsafe_allow_html=True)
+
+    # --- wynik w setach ---
+    st.markdown("<div class='eyebrow'>Wynik w setach</div>",
+                unsafe_allow_html=True)
+    sc = st.columns(2, gap="medium")
+    for col, nm, kier in zip(sc, (p1, p2), (True, False)):
+        wiersze = []
+        for (w, l), v in o["sets"].items():
+            wygral_p1 = w > l
+            if wygral_p1 != kier:
+                continue
+            a, b = (w, l) if kier else (l, w)
+            wiersze.append(
+                f"<div class='stat'><span class='sub'>{a}:{b}</span>"
+                f"<span>{100 * v:.0f}%</span></div>")
+        col.markdown(f"<div class='card'><b>{nm}</b>{''.join(wiersze)}</div>",
+                     unsafe_allow_html=True)
+
+    # --- pozostale rynki ---
+    st.markdown("<div class='eyebrow'>Pozostałe rynki</div>",
+                unsafe_allow_html=True)
+    m = st.columns(3, gap="medium")
+    m[0].metric("Tie-break w meczu", f"{100 * o['p_any_tiebreak']:.0f}%")
+    m[1].metric("Gemy — prognoza", f"{o['exp_games']:.1f}")
+    m[2].metric("Setów", f"{o['exp_sets']:.1f}")
+    st.markdown(
+        "<div class='sub'>Prognoza gemów pochodzi z tego samego modelu, ale "
+        "<b>długość meczu jest z natury trudna</b> — typowa pomyłka to ok. "
+        "5,6 gema. Do wyceny totali używaj jej ostrożnie.</div>",
+        unsafe_allow_html=True)
+
+    with st.expander("Skąd te liczby"):
+        st.markdown(
+            f"<div class='sub'>Model punktowy: z prawdopodobieństwa wygrania "
+            f"punktu liczymy analitycznie gem, tie-break, set i mecz. "
+            f"Zakłada niezależność punktów — przybliżenie, bo punkty ważne "
+            f"rozgrywane są inaczej, dlatego prognozy są dodatkowo ściągane "
+            f"do środka.<br><br>"
+            f"Utrzymanie podania: <b>{p1.split()[-1]} "
+            f"{100 * o['hold1']:.0f}%</b>, <b>{p2.split()[-1]} "
+            f"{100 * o['hold2']:.0f}%</b>. Szansa wygrania seta przez "
+            f"{p1.split()[-1]}: <b>{100 * o['p_set']:.0f}%</b>."
+            f"<br><br>Walidacja out-of-sample: log loss 0,655 wobec 0,693 "
+            f"dla rzutu monetą i 0,872 dla „wyżej notowany wygrywa”. "
+            f"Trafność 60%.</div>", unsafe_allow_html=True)
+
+
 def surface_of(cfg: dict) -> str:
     return {"Hard": "hard", "Clay": "mączka", "Grass": "trawa"}.get(
         cfg["surface"], cfg["surface"].lower())
@@ -1101,11 +1208,14 @@ def view_detail():
             for m in minor:
                 st.markdown("- " + m)
 
-    t1, t2, t3 = st.tabs(["Asy", "Podwójne błędy", "H2H i forma"])
+    t1, t2, t4, t3 = st.tabs(["Asy", "Podwójne błędy", "Przebieg meczu",
+                              "H2H i forma"])
     with t1:
         stat_tab("ace", p1, p2, e1, e2, cfg, mkey)
     with t2:
         stat_tab("df", p1, p2, e1, e2, cfg, mkey)
+    with t4:
+        match_tab(p1, p2, cfg, mkey)
     with t3:
         h2h_tab(p1, p2, e1, e2, cfg, mkey)
 
