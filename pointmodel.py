@@ -6,7 +6,18 @@ tie-breaka, seta i meczu. Z jednego rachunku wypada wszystko naraz:
 zwyciezca, wynik w setach, szansa na tie-break, rozklad liczby gemow.
 
 Zalozenie: punkty sa niezalezne. To przyblizenie — punkty wazne rozgrywane
-sa inaczej — ale standardowe i wystarczajace.
+sa inaczej.
+
+ZWALIDOWANE (test na sezonach 2025+, n=2628 meczow):
+  poziom gema   — bardzo dobry, blad do 0.009 na calym zakresie p_serve
+  zwyciezca     — log loss 0.655 vs 0.693 (moneta) i 0.872 (ranking)
+  wynik w setach— ZANIZA rozstrzygalnosc: 2:0 model 43%, fakt 52%
+  tie-break     — ZAWYZA: model 50%, fakt 40%
+
+Dwa ostatnie to bezposredni skutek zalozenia niezaleznosci: model produkuje
+zbyt wyrownane mecze. Probowalem korekty jednym mnoznikiem "rozstrzygalnosci",
+ale strojenie nie dalo stabilnego optimum, wiec nie wdrozylem — lepiej
+zaznaczyc ograniczenie niz doklejac niesprawdzony parametr.
 """
 from __future__ import annotations
 
@@ -16,7 +27,14 @@ import numpy as np
 import pandas as pd
 
 # Sciaganie do sredniej tourowej, w punktach serwisowych.
-# Mediana zawodnika to ~7750 pkt, wiec K=2000 to umiarkowana korekta.
+# Dobrane out-of-sample (log loss na sezonach testowych):
+#   K_pts:   500 -> 0.6539, 2000 -> 0.6543, 8000 -> 0.6547  (plaskie)
+#   K_surf:  250 -> 0.6593, 1000 -> 0.6543, 4000 -> 0.6583  (wyrazne minimum)
+#
+# Uwaga: przy ASACH slabsze sciaganie nawierzchni pomagalo (400 zamiast 800),
+# tutaj jest ODWROTNIE. Powod: p_serve ma maly rozrzut miedzy nawierzchniami
+# (srednio 0.024 miedzy hardem a maczka), wiec przy malej probie na danej
+# nawierzchni szum przewaza nad sygnalem. Ace% rozni sie duzo mocniej.
 SHRINK_PTS = 2000.0
 SHRINK_SURF = 1000.0
 
@@ -223,6 +241,76 @@ def build_serve_rates(matches: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
 
     meta = {"tour_p_serve": float(tour), "surf_mult": surf_mult}
     return out, meta
+
+
+# --- polaczenie z rankingiem ---
+# Sam model punktowy widzi TYLKO serwis. W meczach, gdzie serwisy sa podobne
+# (roznica p_serve ~0.005), nie ma czym rozstrzygac — a ranking trafia tam
+# w 58.5%. Ranking niesie informacje o returnie, klasie i formie
+# dlugoterminowej, ktorej statystyki serwisowe nie oddaja.
+#
+# Wspolczynniki z regresji logistycznej, strojone na sezonach <2025,
+# mierzone na 2025+:
+#   sam model punktowy   log loss 0.6529
+#   sam ranking          0.6348
+#   model + ranking      0.6311   (+3.34%)
+# W sporach z rankingiem trafnosc rosnie z 43.8% na 55.3%.
+RANK_BLEND = {"intercept": 0.0, "model": 0.706, "rank": -0.394}
+
+# SPRAWDZONE I ODRZUCONE (test 2025+, n=5359, strojenie na <2025):
+#   model + ranking (obecne)      log loss 0.6338  trafnosc 0.636
+#   + break pointy                          0.6335           0.636
+#   + forma wynikowa                        0.6352           0.636
+#   + H2H                                   0.6338           0.635
+#   + wszystkie trzy                        0.6350           0.631  (gorzej)
+#
+# Dlaczego nie dzialaja — trwalosc cechy miedzy okresami:
+#   ranking (mediana)      r = 0.691   <- trwaly
+#   odsetek wygranych      r = 0.688   <- trwaly, ale to TO SAMO co ranking
+#   obrona break pointow   r = 0.352   <- polowa to szum
+#
+# Samodzielna trafnosc: ranking 0.639, % wygranych 0.612, break pointy 0.563.
+# Ranking jest najlepszy i pozostale sa z nim mocno skorelowane — dokladaja
+# szum, nie informacje. Wspolczynnik przy formie wyszedl UJEMNY (-0.287),
+# co jest podrecznikowym objawem dopasowania do szumu.
+#
+# SPRAWDZONE I ODRZUCONE: "upodobanie do nawierzchni" (odsetek wygranych na
+# danej nawierzchni minus ogolny). Intuicyjnie sensowne — nie kazdy lubi
+# trawe — ale w danych nie dziala:
+#   model + ranking                  log loss 0.6338
+#   model + ranking + upodobanie     log loss 0.6340  (gorzej)
+# Powod: upodobanie ma korelacje tylko 0.285 miedzy okresami (ace% ma 0.92),
+# bo opiera sie na 20-30 meczach rocznie i zalezy od losowania drabinki.
+# Model i tak zna nawierzchnie przez splity p_serve i p_conceded, a ranking
+# niesie reszte klasy zawodnika.
+
+
+def blend_with_rank(p_model: float, rank: float | None,
+                    opp_rank: float | None) -> float:
+    """
+    Laczy prognoze punktowa z rankingiem. Gdy rankingu brak, zwraca
+    prognoze modelu bez zmian.
+    """
+    if rank is None or opp_rank is None:
+        return p_model
+    try:
+        r1, r2 = float(rank), float(opp_rank)
+    except (TypeError, ValueError):
+        return p_model
+    if not (r1 > 0 and r2 > 0):
+        return p_model
+    p = min(max(float(p_model), 1e-6), 1 - 1e-6)
+    lg = np.log(p / (1 - p))
+    dr = np.log(min(max(r1, 1), 2000)) - np.log(min(max(r2, 1), 2000))
+    z = (RANK_BLEND["intercept"] + RANK_BLEND["model"] * lg
+         + RANK_BLEND["rank"] * dr)
+    return float(1 / (1 + np.exp(-np.clip(z, -30, 30))))
+
+
+def fair_odds(p: float) -> float:
+    """Kurs, przy ktorym zaklad ma zerowa wartosc oczekiwana."""
+    p = min(max(float(p), 1e-6), 1 - 1e-6)
+    return 1.0 / p
 
 
 def effective_p_serve(rates: pd.DataFrame, meta: dict, server: str,

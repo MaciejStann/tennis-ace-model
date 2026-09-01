@@ -7,6 +7,7 @@ Logika obliczeń jest w model.py, terminarz w fixtures.py. Ten plik to
 wyłącznie interfejs.
 """
 import datetime as dt
+import json
 import re
 
 import numpy as np
@@ -16,6 +17,10 @@ from scipy import stats as sst
 
 import model as M
 from fixtures import fetch_events
+try:
+    import fixtures_free as FREE
+except ImportError:
+    FREE = None
 
 st.set_page_config(page_title="Tennis Ace Model", page_icon="🎾",
                    layout="wide", initial_sidebar_state="expanded")
@@ -210,6 +215,30 @@ def load_point():
     return M.load_point_rates(MATCHES)
 
 
+@st.cache_data(show_spinner=False)
+def last_ranks():
+    """
+    Ranking zawodnika: najpierw swiezy z data/current_ranks.json (zapisywany
+    przez update_db.py), potem ostatni z bazy meczow.
+
+    Kolejnosc ma znaczenie: ranking sprzed 90 dni traci 2.3 pp trafnosci
+    wzgledem aktualnego.
+    """
+    out = {}
+    if MATCHES is not None and "rank" in MATCHES.columns:
+        m = MATCHES.dropna(subset=["rank"]).sort_values("tourney_date")
+        out = m.groupby("player")["rank"].last().to_dict()
+    path = M.DATA / "current_ranks.json"
+    if path.exists():
+        try:
+            for nm, v in json.loads(path.read_text()).items():
+                if isinstance(v, dict) and v.get("rank"):
+                    out[nm] = float(v["rank"])
+        except ValueError:
+            pass
+    return out
+
+
 try:
     PLAYERS, META, CALIB, MATCHES = load_all()
 except FileNotFoundError:
@@ -254,13 +283,22 @@ def infer_best_of(tournament: str, rank_name: str) -> tuple[int, str]:
     return 3, ""
 
 
+def polowka(x: float) -> float:
+    """Najblizsza polowka (x.5). Linie totali nigdy nie sa calkowite —
+    przy calkowitej wynik rowny linii oznacza zwrot stawki, czego model
+    nie liczy."""
+    return round(float(x) - 0.5) + 0.5
+
+
 def default_games(best_of: int, surface: str) -> float:
     table = META.get("avg_games", {}).get(str(best_of), {})
-    return float(table.get(surface) or table.get("_all")
-                 or (35.6 if best_of == 5 else 22.8))
+    v = float(table.get(surface) or table.get("_all")
+              or (35.6 if best_of == 5 else 22.8))
+    return polowka(v)
 
 
 def surface_from_court(court: str) -> tuple[str | None, bool]:
+    # Flashscore podaje np. "hard", "clay", "indoor hard"
     c = (court or "").lower()
     surf = next((s for w, s in (("clay", "Clay"), ("grass", "Grass"),
                                 ("hard", "Hard"), ("carpet", "Hard"))
@@ -294,9 +332,23 @@ def open_match(name1: str, name2: str, ctx: dict | None = None,
 
 # =============================================================== widok listy
 
-@st.cache_data(ttl=3600, show_spinner="Pobieram terminarz…")
+@st.cache_data(ttl=1800, show_spinner="Pobieram terminarz…")
 def _fetch_cached(days: int, token: int):
-    return fetch_events(days_ahead=days, tours=("atp",))
+    """
+    Najpierw Sofascore — darmowe i bez limitu, wiec 500 zapytan z RapidAPI
+    zostaje na dane statystyczne. RapidAPI tylko jako zapasowe.
+    """
+    if FREE is not None:
+        ev, msg = FREE.fetch_events(days_ahead=days, tours=("atp",))
+        if ev:
+            return ev, msg
+        pierwszy = msg
+    else:
+        pierwszy = "Moduł fixtures_free.py nie jest zainstalowany."
+    ev, msg = fetch_events(days_ahead=days, tours=("atp",))
+    if ev:
+        return ev, msg + " (źródło zapasowe: RapidAPI)"
+    return [], f"{pierwszy}\n\n--- źródło zapasowe (RapidAPI) ---\n{msg}"
 
 
 def get_events(days: int, token: int):
@@ -577,9 +629,12 @@ def sidebar_detail(ctx: dict, mkey: str) -> dict:
             st.session_state[gkey] = dflt
         st.session_state[pkey] = dflt
 
-        total_games = st.number_input(
-            "Linia bukmachera na total gemów", 12.0, 70.0, step=0.5,
+        total_games_raw = st.number_input(
+            "Linia bukmachera na total gemów", 12.5, 70.5, step=1.0,
             key=gkey, format="%.1f")
+        total_games = polowka(total_games_raw)
+        if abs(total_games - total_games_raw) > 1e-9:
+            st.caption(f"Zaokrąglono do {total_games:g}")
         touched = abs(total_games - dflt) > 0.01
         cc = st.columns([3, 2])
         cc[0].caption(f"Typowo przy bo{best_of} na {surface.lower()}: "
@@ -620,13 +675,12 @@ def market_block(mu: float, key: str, r: float, bankroll: float,
     """Linia, kursy, EV, Kelly i rozkład dla jednego rynku."""
     c = st.columns(3, gap="medium")
     raw_line = c[0].number_input(
-        "Linia", 0.5, 60.5, float(np.floor(mu) + 0.5), 0.5,
+        "Linia", 0.5, 60.5, float(np.floor(mu) + 0.5), 1.0,
         key=f"l_{key}", format="%.1f")
     # Linie totali sa polowkowe (8.5, 9.5, 10.5) — przy calkowitej wynik
     # rowny linii oznacza zwrot stawki, czego model nie liczy. Przyciagamy
     # wiec do najblizszej polowki.
-    line = round(raw_line - 0.5) + 0.5
-    line = min(max(line, 0.5), 60.5)
+    line = min(max(polowka(raw_line), 0.5), 60.5)
     if abs(line - raw_line) > 1e-9:
         c[0].caption(f"Zaokrąglono do {line:g}")
     o_ov = c[1].number_input("Kurs OVER", 1.01, 20.0, 1.90, 0.01,
@@ -877,7 +931,14 @@ def match_tab(p1: str, p2: str, cfg: dict, mkey: str):
         return
 
     o = PM.match_outcome(ps1, ps2, cfg["best_of"])
-    pw1, pw2 = o["p_win"], 1 - o["p_win"]
+    p_raw = o["p_win"]
+
+    # Sam model widzi tylko serwis. Ranking dokłada informację o klasie
+    # zawodnika — w meczach o podobnym serwisie to jedyne, co rozstrzyga.
+    rk = last_ranks()
+    r1, r2 = rk.get(p1), rk.get(p2)
+    pw1 = PM.blend_with_rank(p_raw, r1, r2)
+    pw2 = 1 - pw1
 
     st.markdown("<div class='eyebrow' style='margin-top:.4rem'>"
                 "Kto wygra</div>", unsafe_allow_html=True)
@@ -885,11 +946,27 @@ def match_tab(p1: str, p2: str, cfg: dict, mkey: str):
     for col, nm, pw in zip(c, (p1, p2), (pw1, pw2)):
         col.metric(nm.split()[-1], f"{100 * pw:.0f}%")
 
+    pewnosc = abs(pw1 - 0.5)
+    if pewnosc < 0.04:
+        traf, opis, kol = "52%", "model nie ma zdania", BAD
+    elif pewnosc < 0.08:
+        traf, opis, kol = "56%", "słaby sygnał", BAD
+    elif pewnosc < 0.14:
+        traf, opis, kol = "60%", "przeciętny sygnał", INK
+    elif pewnosc < 0.20:
+        traf, opis, kol = "70%", "mocny sygnał", GOOD
+    else:
+        traf, opis, kol = "75–80%", "bardzo mocny sygnał", GOOD
     st.markdown(
-        f"<div class='sub'>Z prawdopodobieństwa wygrania punktu przy serwisie "
-        f"({p1.split()[-1]} {100 * ps1:.1f}%, {p2.split()[-1]} "
-        f"{100 * ps2:.1f}%) wynika reszta: utrzymanie podania, set, mecz."
-        f"</div>", unsafe_allow_html=True)
+        f"<div class='band' style='border-color:{kol}'>"
+        f"<b style='color:{kol}'>{opis.capitalize()}</b>"
+        f"<div class='sub' style='margin-top:.3rem'>Przy takiej pewności "
+        f"model trafiał historycznie w <b>{traf}</b> przypadków. "
+        f"Serwis: {p1.split()[-1]} {100 * ps1:.1f}%, {p2.split()[-1]} "
+        f"{100 * ps2:.1f}%"
+        + (f" · ranking {r1:.0f} vs {r2:.0f}" if r1 and r2 else
+           " · brak rankingu w bazie")
+        + "</div></div>", unsafe_allow_html=True)
 
     # --- wycena rynku 1/2 ---
     st.markdown("<div class='eyebrow'>Wycena zwycięzcy</div>",
@@ -904,19 +981,30 @@ def match_tab(p1: str, p2: str, cfg: dict, mkey: str):
     for nm, pw, od in ((p1, pw1, o1), (p2, pw2, o2)):
         ev = pw * od - 1
         rows.append({"Zawodnik": nm, "Model": f"{100 * pw:.0f}%",
-                     "Rynek": f"{100 / od / devig:.0f}%", "Kurs": f"{od:.2f}",
+                     "Kurs sprawiedliwy": f"{PM.fair_odds(pw):.2f}",
+                     "Kurs bukmachera": f"{od:.2f}",
+                     "Rynek": f"{100 / od / devig:.0f}%",
                      "EV": f"{100 * ev:+.1f}%"})
     st.dataframe(pd.DataFrame(rows), hide_index=True,
                  use_container_width=True)
     st.markdown(
-        f"<div class='sub'>Marża {100 * (devig - 1):.1f}%. "
-        f"<b>Rynek 1/2 jest wyceniany sprawnie</b> — model rzadko znajdzie "
-        f"tu przewagę i traktuj każdą dużą różnicę z rezerwą.</div>",
+        f"<div class='sub'><b>Kurs sprawiedliwy</b> to taki, przy którym "
+        f"zakład ma zerową wartość oczekiwaną — jeśli bukmacher daje więcej, "
+        f"jest przewaga. Marża {100 * (devig - 1):.1f}%. "
+        f"<b>Rynek 1/2 jest wyceniany sprawnie</b>, więc dużą różnicę "
+        f"traktuj z rezerwą, nie jak okazję.</div>",
         unsafe_allow_html=True)
 
     # --- wynik w setach ---
     st.markdown("<div class='eyebrow'>Wynik w setach</div>",
                 unsafe_allow_html=True)
+    st.markdown(
+        f"<div class='sub' style='color:{CLAY}'>⚠ Ta sekcja jest mniej "
+        f"wiarygodna niż prognoza zwycięzcy. Model zakłada, że punkty są "
+        f"niezależne, więc daje <b>za mało rozstrzygających wyników</b>: "
+        f"2:0 przewiduje na 43%, a w danych zdarza się w 52% wygranych "
+        f"meczów. Traktuj to jako orientację, nie wycenę.</div>",
+        unsafe_allow_html=True)
     sc = st.columns(2, gap="medium")
     for col, nm, kier in zip(sc, (p1, p2), (True, False)):
         wiersze = []
@@ -939,9 +1027,10 @@ def match_tab(p1: str, p2: str, cfg: dict, mkey: str):
     m[1].metric("Gemy — prognoza", f"{o['exp_games']:.1f}")
     m[2].metric("Setów", f"{o['exp_sets']:.1f}")
     st.markdown(
-        "<div class='sub'>Prognoza gemów pochodzi z tego samego modelu, ale "
-        "<b>długość meczu jest z natury trudna</b> — typowa pomyłka to ok. "
-        "5,6 gema. Do wyceny totali używaj jej ostrożnie.</div>",
+        "<div class='sub'>Prognoza gemów: typowa pomyłka ok. 5,6 gema — "
+        "<b>długość meczu jest z natury trudna</b>. Szansa tie-breaka jest "
+        "z tego samego powodu <b>zawyżona o ok. 10 punktów</b> (model 50%, "
+        "w danych 40%). Obie liczby traktuj orientacyjnie.</div>",
         unsafe_allow_html=True)
 
     with st.expander("Skąd te liczby"):
@@ -1019,8 +1108,7 @@ def h2h_tab(p1: str, p2: str, e1: dict, e2: dict, cfg: dict, mkey: str):
             f" <span class='sub'>vs</span> {nm_fmt(p2, w1 is not True)}</span>"
             f"<span style='font-weight:650;font-variant-numeric:tabular-nums'>"
             f"{sc}</span></div>"
-            f"<div class='sub' style='margin-top:.3rem'>Pogrubiony wygrał"
-            f"</div></div>", unsafe_allow_html=True)
+            f"</div>", unsafe_allow_html=True)
 
         # --- blok 3: serwis w tym meczu, zawodnik obok zawodnika ---
         st.markdown("<div class='eyebrow' style='margin-top:.6rem'>"

@@ -14,6 +14,11 @@ from scipy import stats
 DATA = pathlib.Path(__file__).parent / "data"
 
 
+def current_ranks(players) -> dict:
+    """Ostatni znany ranking kazdego zawodnika (z bazy meczow)."""
+    return {}
+
+
 def load_point_rates(matches):
     """Stawki punktowe do modelu meczu. None, gdy brak kolumn serwisowych."""
     if matches is None or "sv_1won" not in matches.columns:
@@ -88,6 +93,13 @@ def match_name(query: str, index: list[str], cache: dict) -> tuple[str | None, f
             continue
         # (2) wszystkie znaczace czlony zapytania musza byc w kandydacie
         if not all(w in cand for w in words):
+            # Niektore zrodla podaja pelne nazwisko z drugim czlonem
+            # ("Alcaraz Garfia Carlos" = Carlos Alcaraz). Dopuszczamy
+            # nadmiarowe czlony, o ile imie i pierwszy czlon nazwiska
+            # sie zgadzaja i trafienie jest jednoznaczne.
+            wspolne = [w for w in words if w in cand]
+            if len(cand) >= 2 and len(wspolne) >= len(cand):
+                hits.append((orig, 0.80))
             continue
         # (3) jeden czlon -> musi byc nazwiskiem kandydata
         if len(words) == 1 and words[0] != cand[-1]:

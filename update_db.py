@@ -232,15 +232,42 @@ def save_cache(c: dict):
     ID_CACHE.write_text(json.dumps(c, indent=1, ensure_ascii=False))
 
 
+RANKS_FILE = DATA / "current_ranks.json"
+
+
+def save_rank(name: str, rank) -> None:
+    """
+    Ranking starzeje sie szybko — z pomiaru: sprzed 30 dni traci 1.6 pp
+    trafnosci, sprzed 90 dni 2.3 pp. Zapisujemy go przy okazji pobierania
+    profilu, bez dodatkowych zapytan.
+    """
+    try:
+        r = int(rank)
+    except (TypeError, ValueError):
+        return
+    if r < 1:
+        return
+    d = {}
+    if RANKS_FILE.exists():
+        try:
+            d = json.loads(RANKS_FILE.read_text())
+        except ValueError:
+            d = {}
+    d[name] = {"rank": r, "date": date.today().strftime("%Y%m%d")}
+    RANKS_FILE.write_text(json.dumps(d, indent=1, ensure_ascii=False))
+
+
 def find_id(api: Api, name: str, tour="atp") -> tuple[int | None, str | None]:
     """
     1) search  -> potwierdza dokladny zapis nazwy (zwraca same stringi)
-    2) profile -> z niego wyciagamy numeryczne ID
+    2) profile -> z niego wyciagamy numeryczne ID i AKTUALNY ranking
     """
     exact = search_name(api, name, tour) or name
     prof = api.get(f"/profile/{quote(exact)}")
     if "_error" in prof:
         return None, exact
+    if isinstance(prof, dict):
+        save_rank(exact, prof.get("currentRank"))
 
     pid = deep_id(prof)
     if pid:
@@ -487,8 +514,38 @@ def flush(new_rows: list[dict]) -> int:
 
 
 def update(api: Api, top: int, years: list[int], tour="atp",
-           active_days: int = 400):
+           active_days: int = 400, z_terminarza: bool = False):
     existing = pd.read_csv(DATA / "players.csv", index_col=0)
+
+    # --- tryb "z terminarza": aktualizuj tych, ktorzy WLASNIE graja ---
+    # Sortowanie po liczbie meczow tworzylo bledne kolo: zawodnik z mala
+    # historia nigdy nie trafial do aktualizacji, wiec jego historia nie
+    # rosla. Terminarz jest darmowy (Flashscore), wiec mozemy wziac
+    # dokladnie tych, ktorzy dzis wychodza na kort.
+    if z_terminarza:
+        try:
+            import fixtures_free as FREE
+            import model as M
+            ev, msg = FREE.fetch_events(days_ahead=2, tours=("atp",))
+            print(f"Terminarz: {msg.splitlines()[0]}")
+            names = sorted(existing.index.tolist())
+            cache, targets = {}, []
+            for e in ev:
+                for surowe in (e["p1"], e["p2"]):
+                    m, _ = M.match_name(surowe, names, cache)
+                    if m and m not in targets:
+                        targets.append(m)
+            if targets:
+                print(f"Z terminarza: {len(targets)} zawodnikow\n")
+                # Lista "juz zaktualizowanych" ma sens przy trybie top-N,
+                # gdzie przechodzimy dluga liste po kawalku. Przy trybie
+                # z terminarza pomijalaby dokladnie tych, ktorych chcemy
+                # odswiezyc, bo dzis graja.
+                _pobierz(api, targets, years, tour, pomijaj_zrobione=False)
+                return
+            print("Nikogo nie dopasowano — wracam do trybu top-N.\n")
+        except Exception as exc:
+            print(f"Terminarz niedostepny ({exc}) — tryb top-N.\n")
 
     # Odsiewamy zawodnikow, ktorzy dawno nie grali. Sortowanie po liczbie
     # meczow stawia wysoko emerytow (Nadal, Thiem, Schwartzman) — maja setki
@@ -509,13 +566,19 @@ def update(api: Api, top: int, years: list[int], tour="atp",
         print("  np.: " + ", ".join(list(skipped.index[:5])))
     print(f"Aktualizuje {len(targets)} zawodnikow\n")
 
+    _pobierz(api, targets, years, tour)
+
+
+def _pobierz(api: Api, targets: list[str], years: list[int], tour: str,
+             pomijaj_zrobione: bool = True):
+    """Pobiera mecze dla podanej listy zawodnikow."""
     cache = load_cache()
     done_path = DATA / "updated.json"
     done = set(json.loads(done_path.read_text())) if done_path.exists() else set()
-    if done:
+    if pomijaj_zrobione and done:
         print(f"Wznawiam — {len(done)} zawodnikow juz zaktualizowanych "
               "(usun data/updated.json zeby zaczac od nowa)\n")
-    targets = [t for t in targets if t not in done]
+        targets = [t for t in targets if t not in done]
 
     new_rows, missing, added = [], [], 0
     try:
@@ -587,6 +650,9 @@ if __name__ == "__main__":
     ap.add_argument("--inspect", metavar="NAME")
     ap.add_argument("--top", type=int, default=150)
     ap.add_argument("--years", default="2026")
+    ap.add_argument("--z-terminarza", action="store_true",
+                    help="aktualizuj zawodnikow z dzisiejszego terminarza "
+                         "zamiast top-N (darmowy Flashscore)")
     ap.add_argument("--active-days", type=int, default=400,
                     help="pomin zawodnikow bez meczu od tylu dni "
                          "(domyslnie 400 — odsiewa emerytow)")
@@ -605,4 +671,5 @@ if __name__ == "__main__":
         inspect(api, args.inspect)
     else:
         update(api, args.top, [int(y) for y in args.years.split(",")],
-               active_days=args.active_days)
+               active_days=args.active_days,
+               z_terminarza=args.z_terminarza)
