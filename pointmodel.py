@@ -36,7 +36,12 @@ import pandas as pd
 # (srednio 0.024 miedzy hardem a maczka), wiec przy malej probie na danej
 # nawierzchni szum przewaza nad sygnalem. Ace% rozni sie duzo mocniej.
 SHRINK_PTS = 2000.0
-SHRINK_SURF = 1000.0
+
+# SHRINK_SURF usuniete — splity nawierzchniowe uzywaja tego samego K co
+# reszta. Ablacja out-of-sample (n=5363): osobny parametr 1000 dawal
+# log loss 0.6341, wspolny 2000 daje 0.6335. Czyli parametr nie tylko
+# nie zarabial na siebie, ale minimalnie szkodzil.
+SHRINK_SURF = SHRINK_PTS
 
 # --- kalibracja, dobrana out-of-sample (validate_point.py) ---
 # Model punktowy jest ZBYT PEWNY: zaklada niezaleznosc punktow, a w

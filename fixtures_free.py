@@ -18,6 +18,7 @@ Format feedu jest wlasny: rekordy rozdzielone "~", pola "¬", kazde pole to
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -111,8 +112,11 @@ def fetch_events(days_ahead: int = 2, tours=("atp",),
             start = ""
             ts = p.get("AD")
             if ts and ts.isdigit():
-                start = datetime.fromtimestamp(
-                    int(ts), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M")
+                # Feed podaje czas w UTC; pokazujemy polski, bo to jedyny,
+                # ktory ma znaczenie przy planowaniu zakladu.
+                start = (datetime.fromtimestamp(int(ts), tz=timezone.utc)
+                         .astimezone(ZoneInfo("Europe/Warsaw"))
+                         .strftime("%Y-%m-%dT%H:%M"))
 
             events.append({
                 "id": mid, "p1": p1, "p2": p2, "start": start,

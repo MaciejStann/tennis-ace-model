@@ -1,0 +1,12 @@
+Rozpakuj W KATALOGU PROJEKTU (C:\Users\Maciek\Desktop\tab), nadpisz.
+
+Po rozpakowaniu usun stare kopie narzedzi i pliki jednorazowe:
+  Remove-Item analysis.py, backtest.py, form_check.py, check_won.py,
+              diag_fixtures.py, diag_free.py, probe_fs.py, diag_zrodla.py,
+              compare_k.py, data\matches.csv, meta.json -ErrorAction SilentlyContinue
+
+Potem:
+  python -m pytest
+  python -m streamlit run app.py
+
+Motyw przelaczasz w menu Ustawien Streamlita (prawy gorny rog).

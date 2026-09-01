@@ -77,7 +77,7 @@ def init() -> bool:
 # a przełącznik w sidebarze wywołuje przeładowanie.
 LIGHT = {
     "BG": "#F8FAFC", "PANEL": "#FFFFFF", "SIDE": "#EEF4FA",
-    "TEXT": "#16202B", "INK": "#6B7A8A", "LINE": "#DCE6F0",
+    "TEXT": "#16202B", "INK": "#556270", "LINE": "#DCE6F0",
     "CLAY": "#2E7FD4",        # błękit kortu — akcent
     "CLAY_DEEP": "#1B4F8A",   # duże płaszczyzny
     "CLAY_DIM": "#9DC2E8",
@@ -89,7 +89,7 @@ LIGHT = {
 }
 DARK = {
     "BG": "#0E141C", "PANEL": "#18212C", "SIDE": "#131B24",
-    "TEXT": "#E8EEF5", "INK": "#8B9CAE", "LINE": "#26323F",
+    "TEXT": "#E8EEF5", "INK": "#9AAABB", "LINE": "#2B3846",
     "CLAY": "#57A0E8", "CLAY_DEEP": "#12395F", "CLAY_DIM": "#6F9BC4",
     "CLAY_SOFT": "#17293C",
     "SUN": "#F0B45C",
@@ -98,7 +98,10 @@ DARK = {
     "HARD": "#57A0E8",
 }
 
-T = DARK if st.session_state.get("dark_mode") else LIGHT
+# UWAGA: modul importuje sie RAZ, wiec wybor palety nie moze zostac tutaj.
+# Po podziale na moduly ciemny motyw przestal dzialac wlasnie dlatego —
+# `zastosuj_css()` przelicza go teraz przy kazdym przebiegu skryptu.
+T = LIGHT
 BG, PANEL, SIDE = T["BG"], T["PANEL"], T["SIDE"]
 TEXT, INK, LINE = T["TEXT"], T["INK"], T["LINE"]
 CLAY, CLAY_DEEP, CLAY_DIM, CLAY_SOFT = (T["CLAY"], T["CLAY_DEEP"],
@@ -108,7 +111,8 @@ GOOD, GOOD_SOFT, BAD, BAD_SOFT = (T["GOOD"], T["GOOD_SOFT"],
 SUN = T["SUN"]
 SURFACE_COLOR = {"Hard": T["HARD"], "Clay": "#C9683F", "Grass": GOOD}
 
-CSS = f"""
+def _css():
+    return f"""
 <style>
   /* nadpisujemy motyw z config.toml, zeby przelacznik dzialal w locie */
   .stApp, [data-testid="stAppViewContainer"] {{
@@ -118,22 +122,84 @@ CSS = f"""
       color: inherit; }}
   h1, h2, h3, h4 {{ color: {TEXT}; }}
 
-  .block-container {{ padding-top: 2.4rem; max-width: 1100px; }}
+  /* Cale UI o ~6% wieksze — przy tabelach liczb latwiej o pomylke,
+     gdy tekst jest maly. */
+  html {{ font-size: 17px; }}
+  .block-container {{ padding-top: 2.2rem; max-width: 1180px; }}
   html, body, [class*="css"] {{ -webkit-font-smoothing: antialiased; }}
   h1 {{ font-weight: 640; letter-spacing: -.026em; font-size: 2rem;
         margin: 0 0 .2rem; line-height: 1.18; }}
   hr {{ border-color: {LINE}; }}
 
-  .eyebrow {{ font-size: .68rem; letter-spacing: .15em;
+  .eyebrow {{ font-size: .72rem; letter-spacing: .13em;
               text-transform: uppercase; color: {CLAY}; font-weight: 700;
               margin: 1.8rem 0 .7rem; }}
-  .sub {{ font-size: .82rem; color: {INK}; line-height: 1.6; }}
+  .sub {{ font-size: .87rem; color: {INK}; line-height: 1.62; }}
   /* `sub` to podpis przy danych; `note` to wyjasnienie merytoryczne.
      Rozdzielone, zeby ostrzezenia nie zlewaly sie z etykietami. */
-  .note {{ font-size: .84rem; color: {INK}; line-height: 1.65;
-           margin: .5rem 0; padding-left: .7rem;
+  /* --- wiersze terminarza --- */
+  /* Przycisk-wiersz: wyglada jak pozycja listy, nie jak przycisk. */
+  div[data-testid="stHorizontalBlock"] .stButton button {{
+      text-align: left; justify-content: flex-start;
+      border: none; background: transparent; font-weight: 600;
+      font-size: 1.06rem; padding: .75rem .25rem; border-radius: 8px;
+      letter-spacing: -.005em;
+  }}
+  /* Streamlit owija etykiete w <p> z wlasnym wyrownaniem — bez tego
+     nazwiska zostawaly wysrodkowane mimo reguly wyzej. */
+  div[data-testid="stHorizontalBlock"] .stButton button p,
+  div[data-testid="stHorizontalBlock"] .stButton button div {{
+      text-align: left !important; width: 100%;
+      /* Najdluzsze nazwisko w bazie ma 33 znaki; para moze dac 66.
+         Przy waskim oknie ucinamy zamiast lamac wiersz na dwie linie. */
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }}
+  div[data-testid="stHorizontalBlock"] .stButton button:hover {{
+      background: transparent; color: {CLAY};
+  }}
+  /* Kreska miedzy meczami + naprzemienne tlo, zeby oko trzymalo wiersz. */
+  /* :not(...) wyklucza rzad z pigulkami widoku — tam podswietlenie
+     calego pasa wygladalo jak blad. */
+  div[data-testid="stHorizontalBlock"]:has(.stButton):not(
+      :has(div[role="radiogroup"])) {{
+      border-bottom: 1px solid {LINE}; align-items: center;
+      border-radius: 8px; transition: background .12s;
+      min-height: 3.2rem;
+  }}
+  div[data-testid="stHorizontalBlock"]:has(.stButton):not(
+      :has(div[role="radiogroup"])):nth-of-type(even) {{
+      background: rgba(127,127,127,.035);
+  }}
+  /* Podswietlenie CALEGO wiersza, nie samego przycisku. */
+  div[data-testid="stHorizontalBlock"]:has(.stButton):not(
+      :has(div[role="radiogroup"])):hover {{
+      background: {CLAY_SOFT};
+  }}
+  /* Wiersz terminarza — wyzszy, zeby dalo sie go objac wzrokiem. */
+  div[data-testid="stCaptionContainer"] p {{ font-size: .84rem;
+      color: {INK}; line-height: 1.55; }}
+  .row-meta {{ font-size: .86rem; color: {INK}; text-align: right;
+               padding-right: .5rem; line-height: 1.3; }}
+  .row-prog {{ font-size: .95rem; color: {TEXT};
+               font-variant-numeric: tabular-nums; line-height: 1.3; }}
+  .row-prog-l {{ font-size: .7rem; color: {INK}; text-transform: uppercase;
+                 letter-spacing: .08em; margin-right: .35rem; }}
+  /* Separator miedzy zawodnikami — kolejnosc jak w nazwiskach obok. */
+  .row-prog-s {{ color: {INK}; opacity: .5; margin: 0 .3rem; }}
+  /* Ostrzezenie jako ikona z podpowiedzia — pelny tekst lamal wiersz. */
+  .row-warn {{ color: {SUN}; margin-right: .45rem; cursor: help;
+               font-size: .9rem; }}
+  /* Przycisk "Odswiez" obok pigulek widoku — wyrownany do ich wysokosci. */
+  div[data-testid="stHorizontalBlock"]:has(div[role="radiogroup"])
+      .stButton button {{
+      font-size: .84rem; padding: .32rem .7rem; border: 1px solid {LINE};
+      background: {PANEL}; font-weight: 600;
+  }}
+
+  .note {{ font-size: .89rem; color: {INK}; line-height: 1.68;
+           margin: .55rem 0; padding-left: .8rem;
            border-left: 2px solid {LINE}; }}
-  .lead {{ font-size: .95rem; color: {INK}; line-height: 1.6;
+  .lead {{ font-size: 1rem; color: {INK}; line-height: 1.62;
            margin: .2rem 0 1.6rem; }}
 
   /* blok koloru: zaokraglony, w rytmie tresci, nie na pelna szerokosc */
@@ -239,8 +305,17 @@ CSS = f"""
   .stButton button {{ border-radius:12px; font-weight:600;
       border:1px solid {LINE}; background:{PANEL}; color:{TEXT}; }}
   .stButton button:hover {{ border-color:{CLAY}; color:{CLAY}; }}
-  div[data-testid="stNumberInput"] input,
-  div[data-baseweb="select"] > div {{ background:{PANEL}; color:{TEXT}; }}
+  /* Wlasna tabela — st.dataframe rysuje sie na plotnie i ignoruje CSS. */
+  .tbl {{ width: 100%; border-collapse: collapse; font-size: .9rem;
+          margin: .3rem 0 .2rem; }}
+  .tbl th {{ text-align: left; font-size: .72rem; letter-spacing: .09em;
+             text-transform: uppercase; color: {INK}; font-weight: 700;
+             padding: .5rem .7rem; border-bottom: 1px solid {LINE}; }}
+  .tbl td {{ padding: .6rem .7rem; border-bottom: 1px solid {LINE};
+             color: {TEXT}; font-variant-numeric: tabular-nums; }}
+  .tbl tr:last-child td {{ border-bottom: none; }}
+  .tbl tbody tr:hover {{ background: {CLAY_SOFT}; }}
+
 </style>
 """
 
@@ -248,7 +323,33 @@ CSS = f"""
 
 
 def zastosuj_css():
-    """Wstrzykuje CSS biezacej palety. Wolane raz, na gorze skryptu."""
+    """
+    Ustawia palete wedlug przelacznika i wstrzykuje CSS.
+    Wolane przy KAZDYM przebiegu — inaczej motyw zostalby zamrozony
+    na wartosci z momentu importu modulu.
+    """
+    global T, BG, PANEL, SIDE, TEXT, INK, LINE, CLAY, CLAY_DEEP
+    global CLAY_DIM, CLAY_SOFT, SUN, GOOD, GOOD_SOFT, BAD, BAD_SOFT
+    global SURFACE_COLOR, CSS
+
+    # Domyslnie ciemna, zgodnie z config.toml. Przelacznik zmienia NASZE
+    # elementy; natywne widgety Streamlita ida wylacznie za config.toml.
+    # Podazamy za motywem wybranym w menu Ustawien Streamlita.
+    # st.context.theme.type zwraca "dark" albo "light".
+    try:
+        jasny = st.context.theme.type == "light"
+    except Exception:
+        jasny = False
+    T = LIGHT if jasny else DARK
+    BG, PANEL, SIDE = T["BG"], T["PANEL"], T["SIDE"]
+    TEXT, INK, LINE = T["TEXT"], T["INK"], T["LINE"]
+    CLAY, CLAY_DEEP, CLAY_DIM, CLAY_SOFT = (T["CLAY"], T["CLAY_DEEP"],
+                                            T["CLAY_DIM"], T["CLAY_SOFT"])
+    SUN = T["SUN"]
+    GOOD, GOOD_SOFT, BAD, BAD_SOFT = (T["GOOD"], T["GOOD_SOFT"],
+                                      T["BAD"], T["BAD_SOFT"])
+    SURFACE_COLOR = {"Hard": T["HARD"], "Clay": "#C9683F", "Grass": GOOD}
+    CSS = _css()
     st.markdown(CSS, unsafe_allow_html=True)
 
 

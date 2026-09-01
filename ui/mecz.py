@@ -11,6 +11,51 @@ from ui.nawigacja import go_back, theme_switch
 from ui.pomocnicze import ROUNDS, default_games, polowka, surface_of
 
 
+def _szacunek_gemow(p1, p2, surface: str, best_of: int):
+    """Szacunek dlugosci meczu z modelu punktowego. None, gdy brak danych."""
+    if not p1 or not p2:
+        return None
+    try:
+        rates, pmeta = S.load_point()
+        if rates is None:
+            return None
+        a = PM.effective_p_serve(rates, pmeta, p1, p2, surface)
+        b = PM.effective_p_serve(rates, pmeta, p2, p1, surface)
+        if a is None or b is None:
+            return None
+        return PM.match_outcome(a, b, best_of)["exp_games"]
+    except Exception:
+        return None
+
+
+def tabela(rows: list[dict], wyroznij: str | None = None):
+    """
+    Tabela jako HTML zamiast st.dataframe.
+
+    st.dataframe renderuje sie na plotnie (glide-data-grid), wiec nie
+    reaguje na nasz CSS i w ciemnym motywie zostawala biala.
+    """
+    if not rows:
+        return
+    kol = list(rows[0])
+    thead = "".join(f"<th>{k}</th>" for k in kol)
+    tbody = ""
+    for r in rows:
+        tds = ""
+        for k in kol:
+            v = str(r[k])
+            styl = ""
+            if k == wyroznij or v.startswith("+") or v.startswith("-"):
+                if v.startswith("+"):
+                    styl = f" style='color:{S.GOOD};font-weight:650'"
+                elif v.startswith("-"):
+                    styl = f" style='color:{S.BAD};font-weight:650'"
+            tds += f"<td{styl}>{v}</td>"
+        tbody += f"<tr>{tds}</tr>"
+    st.markdown(f"<table class='tbl'><thead><tr>{thead}</tr></thead>"
+                f"<tbody>{tbody}</tbody></table>", unsafe_allow_html=True)
+
+
 def _etykieta_powrotu() -> str:
     return ("← Wybór zawodników"
             if st.session_state.get("origin") == "manual"
@@ -41,6 +86,11 @@ def sidebar_detail(ctx: dict, mkey: str) -> dict:
 
         st.markdown("### Długość meczu")
         dflt = default_games(best_of, surface)
+        # Model punktowy potrafi oszacowac dlugosc dla konkretnej pary.
+        # Na calej probie jest tylko tyle samo wart co srednia (MAE 5,49
+        # vs 5,50), ale dopasowuje sie do zestawienia, wiec przy skrajnych
+        # parach powinien byc blizej.
+        szac = _szacunek_gemow(ctx.get("p1"), ctx.get("p2"), surface, best_of)
         gkey, pkey = f"games_{mkey}", f"games_prev_{mkey}"
         # Klucz nie zalezy od formatu ani nawierzchni, wiec recznie wpisana
         # wartosc przezywa ich zmiane. Ale gdy uzytkownik NIC nie wpisal,
@@ -63,8 +113,10 @@ def sidebar_detail(ctx: dict, mkey: str) -> dict:
             st.caption(f"Zaokrąglono do {total_games:g}")
         touched = abs(total_games - dflt) > 0.01
         cc = st.columns([3, 2])
-        cc[0].caption(f"Typowo przy bo{best_of} na {surface.lower()}: "
-                      f"{dflt:.1f}")
+        podp = f"Typowo przy bo{best_of} na {surface.lower()}: {dflt:.1f}"
+        if szac is not None:
+            podp += f" · model dla tej pary: **{szac:.1f}**"
+        cc[0].caption(podp)
         if touched and cc[1].button("Domyślna", use_container_width=True):
             st.session_state[gkey] = dflt
             st.session_state[pkey] = dflt
@@ -97,7 +149,9 @@ def sidebar_detail(ctx: dict, mkey: str) -> dict:
 
 
 def market_block(mu: float, key: str, r: float, bankroll: float,
-                 kfrac: float, mkey_for_sens: str = ""):
+                 kfrac: float, mkey_for_sens: str = "",
+                 ctx_p1: str = "", ctx_p2: str = "",
+                 cfg_ref: dict | None = None, rynek_ref: str = ""):
     """Linia, kursy, EV, Kelly i rozkład dla jednego rynku."""
     c = st.columns(3, gap="medium")
     raw_line = c[0].number_input(
@@ -165,6 +219,11 @@ def market_block(mu: float, key: str, r: float, bankroll: float,
             f"<span class='sub'>wygląda na niedowartościowane o "
             f"{100 * best['ev']:.1f}%. To przewaga oczekiwana, nie pewny "
             f"zakład.</span></div>", unsafe_allow_html=True)
+        # Zapis do rejestru tylko przy dodatnim EV — reszty i tak nie gramy.
+        from ui.rejestr_widok import przycisk_zapisu
+        przycisk_zapisu(
+            ctx_p1, ctx_p2, cfg_ref, rynek_ref, best["side"], line,
+            best["odds"], best["prob"], best["ev"], best["stake"], key)
     else:
         st.markdown(
             f"<div class='band'><span class='sub'>Brak przewagi po żadnej "
@@ -204,8 +263,7 @@ def market_block(mu: float, key: str, r: float, bankroll: float,
                 "Lepsza strona": best_side,
                 "EV": f"{100 * best_ev:+.1f}%",
             })
-        st.dataframe(pd.DataFrame(rows), hide_index=True,
-                     use_container_width=True)
+        tabela(rows)
         sides = {r_["Lepsza strona"] for r_ in rows}
         if len(sides) > 1:
             st.markdown(
@@ -259,7 +317,19 @@ def stat_tab(kind: str, p1: str, p2: str, e1: dict, e2: dict, cfg: dict,
         return
 
     st.markdown(f"<div class='eyebrow' style='margin-top:.4rem'>"
-                f"Rynek — {label}</div>", unsafe_allow_html=True)
+                f"Prognoza — {label}</div>", unsafe_allow_html=True)
+    c = st.columns(3, gap="medium")
+    for col, nm, e in zip(c, (p1, p2), (e1, e2)):
+        # Liczba meczow w bazie decyduje o wiarygodnosci prognozy, wiec
+        # stoi przy niej, a nie tylko w rozbiciu.
+        podpis = (f"{e['n']} meczów w bazie" if e["known"]
+                  else "brak w bazie")
+        col.metric(nm, f"{e[field]:.1f}" if e["known"] else "—", podpis,
+                   delta_color="off")
+    c[2].metric("Razem", f"{total:.1f}" if both else "—")
+
+    st.markdown("<div class='eyebrow'>Rynek do wyceny</div>",
+                unsafe_allow_html=True)
     choice = st.radio("Rynek", list(opts), horizontal=True,
                       key=f"mkt_{kind}_{mkey}", label_visibility="collapsed")
     mu = opts[choice]
@@ -270,19 +340,8 @@ def stat_tab(kind: str, p1: str, p2: str, e1: dict, e2: dict, cfg: dict,
 
     slot = list(opts).index(choice)
     market_block(mu, f"{kind}_{slot}_{mkey}", r, cfg["bankroll"],
-                 cfg["kfrac"], mkey)
-
-    st.markdown("<div class='eyebrow'>Prognoza obu zawodników</div>",
-                unsafe_allow_html=True)
-    c = st.columns(3, gap="medium")
-    for col, nm, e in zip(c, (p1, p2), (e1, e2)):
-        # Liczba meczow w bazie decyduje o wiarygodnosci prognozy, wiec
-        # stoi przy niej, a nie tylko w rozbiciu.
-        podpis = (f"{e['n']} meczów w bazie" if e["known"]
-                  else "brak w bazie")
-        col.metric(nm, f"{e[field]:.1f}" if e["known"] else "—", podpis,
-                   delta_color="off")
-    c[2].metric("Razem", f"{total:.1f}" if both else "—")
+                 cfg["kfrac"], mkey, p1, p2, cfg,
+                 f"{label} · {choice}")
 
     if kind == "df":
         st.markdown(
@@ -439,8 +498,7 @@ def match_tab(p1: str, p2: str, cfg: dict, mkey: str):
                      "Kurs bukmachera": f"{od:.2f}",
                      "Rynek": f"{100 / od / devig:.0f}%",
                      "EV": f"{100 * ev:+.1f}%"})
-    st.dataframe(pd.DataFrame(rows), hide_index=True,
-                 use_container_width=True)
+    tabela(rows)
     st.markdown(
         f"<div class='note'><b>Kurs sprawiedliwy</b> to taki, przy którym "
         f"zakład ma zerową wartość oczekiwaną — jeśli bukmacher daje więcej, "
@@ -700,6 +758,7 @@ def view_detail():
     p1, p2 = st.session_state.picked
     ctx = st.session_state.ctx
     mkey = st.session_state.get("match_key", f"{p1}|{p2}")
+    ctx = dict(ctx, p1=p1, p2=p2)
     cfg = sidebar_detail(ctx, mkey)
 
     head = [ctx.get("tournament", ""), ctx.get("rank_name", ""),

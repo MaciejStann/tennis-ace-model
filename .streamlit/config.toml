@@ -1,14 +1,42 @@
-# Paleta inspirowana Australian Open: kort w błękicie, ciepły akcent.
+# Obie palety definiujemy TUTAJ. Streamlit 1.4x+ obsluguje osobne sekcje
+# [theme.light] i [theme.dark] i sam przelacza swoje widgety — dzieki temu
+# nie musimy ich nadpisywac CSS-em. Przelacznik jest w menu Ustawienia
+# (ikona w prawym gornym rogu), a nasz CSS podaza za nim przez
+# st.context.theme.type.
+#
+# Wczesniej mielismy wlasny przelacznik i 41 regul !important, ktore i tak
+# nie pokrywaly wszystkich pol. To rozwiazanie jest natywne.
+
 [theme]
-base = "light"
+base = "dark"
+font = "sans serif"
+baseFontSize = 17
+
+[theme.light]
 primaryColor = "#2E7FD4"
 backgroundColor = "#F8FAFC"
-secondaryBackgroundColor = "#EAF1F8"
+secondaryBackgroundColor = "#FFFFFF"
 textColor = "#16202B"
-font = "sans serif"
+borderColor = "#DCE6F0"
+
+[theme.light.sidebar]
+backgroundColor = "#EEF4FA"
+secondaryBackgroundColor = "#FFFFFF"
+
+[theme.dark]
+primaryColor = "#57A0E8"
+backgroundColor = "#0E141C"
+secondaryBackgroundColor = "#18212C"
+textColor = "#E8EEF5"
+borderColor = "#2B3846"
+
+[theme.dark.sidebar]
+backgroundColor = "#131B24"
+secondaryBackgroundColor = "#18212C"
 
 [client]
-toolbarMode = "minimal"
+# "auto" odslania menu Ustawien, w ktorym uzytkownik przelacza motyw.
+toolbarMode = "auto"
 showErrorDetails = true
 
 [browser]

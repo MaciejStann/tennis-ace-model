@@ -2,13 +2,13 @@
 import streamlit as st
 
 # Tylko klucze, ktorymi zarzadzamy SAMI. Widgety z wlasnym `key`
-# (hide_low, both_only, newest, dark_mode, list_mode) trzymaja swoj stan
+# (hide_low, both_only, list_mode) trzymaja swoj stan
 # same — deklarowanie ich tutaj i podawanie `value=` naraz wywoluje
 # ostrzezenie Streamlita o podwojnym zrodle prawdy.
 DEFAULTS = {
     "view": "list", "picked": None, "ctx": {}, "namecache": {},
-    "fx_days": 2, "fx_token": 0,
-    "origin": "fixtures", "match_key": "",
+    "fx_token": 0,
+    "origin": "fixtures", "match_key": "", "fx_cache": None,
 }
 
 
@@ -38,7 +38,14 @@ def go_back():
 
 
 def theme_switch():
-    """Przełącznik motywu. Widget zapisuje do session_state, a przeładowanie
-    strony wstrzykuje CSS z odpowiedniej palety."""
-    st.markdown("### Wygląd")
-    st.toggle("Tryb ciemny", key="dark_mode")
+    """
+    Motyw przelacza sie w menu Ustawien Streamlita (ikona w prawym gornym
+    rogu), nie w sidebarze.
+
+    Wlasny przelacznik zostal usuniety, bo dublowal mechanizm, ktory
+    Streamlit ma natywnie — i robil to gorzej: nasze karty zmienialy
+    kolor, a pola wyboru zostawaly w kolorach z config.toml. Obie palety
+    sa teraz w [theme.light] i [theme.dark], a nasz CSS podaza za nimi
+    przez st.context.theme.type.
+    """
+    return

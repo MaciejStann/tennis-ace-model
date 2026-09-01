@@ -20,3 +20,5 @@ venv/
 *_export.csv
 data/matches.csv
 /meta.json
+# Rejestr zakladow — dane prywatne
+data/zaklady.csv

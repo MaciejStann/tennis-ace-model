@@ -6,7 +6,8 @@ import model as M
 import ui.stan as S
 from fixtures import fetch_events
 from ui.nawigacja import open_match, theme_switch
-from ui.pomocnicze import (infer_best_of, surface_from_court)
+from ui.pomocnicze import (default_games, infer_best_of,
+                           surface_from_court)
 
 try:
     import fixtures_free as FREE
@@ -34,13 +35,30 @@ def _fetch_cached(days: int, token: int):
 
 def get_events(days: int, token: int):
     """
-    Cache'ujemy WYŁĄCZNIE udane pobranie. Wcześniej pusty wynik (wyczerpany
-    limit dzienny) siedział w cache przez godzinę — po odnowieniu limitu
-    aplikacja nadal pokazywała błąd, choć API już działało.
+    Terminarz pobieramy RAZ na sesje i trzymamy w session_state.
+
+    Wczesniej polegalismy na cache Streamlita, ale przy pustym wyniku
+    czyscilismy go w calosci — a puste wyniki zdarzaja sie nieregularnie
+    (jedno z dwoch zrodel milczy). Efekt: powrot z analizy do listy
+    potrafil pobierac terminarz od nowa.
+
+    Teraz pobranie nastepuje tylko wtedy, gdy zmienil sie zakres dni albo
+    uzytkownik kliknal "Odswiez" (rosnie token). Nieudana proba nie kasuje
+    ostatniego dobrego wyniku.
     """
+    klucz = (days, token)
+    zapas = st.session_state.get("fx_cache")
+    if zapas and zapas[0] == klucz:
+        return zapas[1], zapas[2]
+
     events, msg = _fetch_cached(days, token)
     if not events:
         _fetch_cached.clear()
+        # zostaw poprzedni dobry wynik, jesli byl
+        if zapas and zapas[1]:
+            return zapas[1], (f"{msg}\n\nPokazuję ostatni pobrany "
+                              f"terminarz.")
+    st.session_state["fx_cache"] = (klucz, events, msg)
     return events, msg
 
 
@@ -97,11 +115,29 @@ def view_list():
         f"</b><span>dane do</span></div>"
         f"</div></div>".replace(",", " "), unsafe_allow_html=True)
 
-    MODES = ["Terminarz ATP", "Wybór ręczny"]
+    MODES = ["Terminarz ATP", "Wybór ręczny", "Rejestr"]
     if st.session_state.pop("goto_manual", False):
         st.session_state.list_mode = MODES[1]
-    mode = st.radio("Widok", MODES, horizontal=True, key="list_mode",
-                    label_visibility="collapsed")
+    # Przelacznik widoku i "Odswiez" w jednym rzedzie — przycisk dotyczy
+    # terminarza, wiec stoi na jego wysokosci, a nie nizej w tresci.
+    m_col, r_col = st.columns([5, 1])
+    with m_col:
+        mode = st.radio("Widok", MODES, horizontal=True, key="list_mode",
+                        label_visibility="collapsed")
+    with r_col:
+        if mode == MODES[0]:
+            if st.button("Odśwież", use_container_width=True,
+                         key="fx_refresh",
+                         help="Pobiera terminarz od nowa. Bez limitu — "
+                              "źródłem jest Flashscore."):
+                st.session_state.fx_token += 1
+                st.rerun()
+
+    # ---------------------------------------------------------- rejestr
+    if mode == MODES[2]:
+        from ui.rejestr_widok import view_rejestr
+        view_rejestr()
+        return
 
     # ---------------------------------------------------- wybór ręczny
     if mode == MODES[1]:
@@ -136,22 +172,9 @@ def view_list():
 
     # ---------------------------------------------------- terminarz
     if mode == MODES[0]:
-        top = st.columns([3, 1, 4])
-        days = top[0].select_slider("Zakres dni", options=[1, 2, 3, 5, 7],
-                                    value=st.session_state.fx_days,
-                                    format_func=lambda d: f"{d} dni",
-                                    key="fx_days_w")
-        # Zapytanie idzie tylko po kliknięciu — plan ma limit dzienny,
-        # a suwak przy każdym ruchu paliłby kolejne wywołania.
-        if top[1].button("Odśwież", use_container_width=True):
-            st.session_state.fx_days = days
-            st.session_state.fx_token += 1
-            st.rerun()
-        if days != st.session_state.fx_days:
-            top[2].caption("Zmieniono zakres — kliknij **Odśwież**.")
-
-        events, msg = get_events(st.session_state.fx_days,
-                                 st.session_state.fx_token)
+        # Zakres na stale: dzis i jutro. Suwak byl zbedny — dluzszy
+        # horyzont i tak nie ma sensu, bo drabinki sie zmieniaja.
+        events, msg = get_events(2, st.session_state.fx_token)
 
         if not events:
             st.markdown(
@@ -167,7 +190,7 @@ def view_list():
             with st.expander("Szczegóły błędu"):
                 st.caption(msg)
                 if st.button("Sprawdź połączenie"):
-                    st.code(fetch_events(days_ahead=st.session_state.fx_days,
+                    st.code(fetch_events(days_ahead=2,
                                          tours=("atp",), debug=True)[1])
             return
 
@@ -176,16 +199,18 @@ def view_list():
             e["m1"], e["c1"] = M.match_name(e["p1"], S.NAMES, cache)
             e["m2"], e["c2"] = M.match_name(e["p2"], S.NAMES, cache)
             e["known"] = sum(1 for k in ("m1", "m2") if e[k])
+            # Nazwa z bazy jest krotsza i spojna ("Carlos Alcaraz" zamiast
+            # "Alcaraz Garfia Carlos" z Flashscore). Oryginal tylko gdy
+            # nie udalo sie dopasowac.
             e["n1"], e["n2"] = e["m1"] or e["p1"], e["m2"] or e["p2"]
             e["conf"] = min(e["c1"] or 1, e["c2"] or 1)
 
-        f = st.columns(3)
+        f = st.columns([2, 2, 3])
         # Widgety z `key` trzymaja stan same — podawanie `value=` naraz
         # daje ostrzezenie o dwoch zrodlach prawdy.
         hide_low = f[0].checkbox("Tylko ATP Tour", True, key="hide_low",
                                  help="Ukrywa Challengery i ITF.")
         both_only = f[1].checkbox("Obaj znani w bazie", False, key="both_only")
-        newest = f[2].checkbox("Od najpóźniejszych", False, key="newest")
 
         shown = events
         if hide_low:
@@ -195,12 +220,12 @@ def view_list():
         if both_only:
             shown = [e for e in shown if e["known"] == 2]
         shown = [e for e in shown if e["known"] >= 1 and e["n1"] != e["n2"]]
-        shown.sort(key=lambda e: e.get("start") or "9999", reverse=newest)
+        shown.sort(key=lambda e: e.get("start") or "9999")
 
         st.caption(f"{len(shown)} z {len(events)} meczów po filtrach")
         if not shown:
             st.info("Brak meczów spełniających filtry — odznacz "
-                    "„Obaj znani w bazie” albo zwiększ zakres dni.")
+                    "„Obaj znani w bazie” albo „Tylko ATP Tour”.")
             return
 
         by_tour: dict[str, list] = {}
@@ -209,7 +234,7 @@ def view_list():
                                []).append(e)
         order = sorted(by_tour.items(),
                        key=lambda kv: min(x.get("start") or "9999"
-                                          for x in kv[1]), reverse=newest)
+                                          for x in kv[1]))
 
         for tname, group in order:
             rank = group[0].get("rank_name") or ""
@@ -219,23 +244,62 @@ def view_list():
                     render_row(e)
 
 
+def _prognoza_wiersza(e):
+    """
+    Szybka prognoza asow i DF do listy. Liczona przy domyslnej dlugosci
+    meczu — dokladna wartosc ustawia sie dopiero w analizie, tu chodzi
+    o rzad wielkosci, zeby dalo sie przebiec wzrokiem po terminarzu.
+    """
+    if e["known"] < 2:
+        return None
+    surf, indoor = surface_from_court(e.get("court", ""))
+    surf = surf or "Hard"
+    bo, _ = infer_best_of(e.get("tournament", ""), e.get("rank_name", ""))
+    gemy = default_games(bo, surf)
+    svpt = gemy * S.META["pts_per_service_game"]
+    try:
+        a = M.estimate(S.PLAYERS, S.META, S.CALIB, e["n1"], e["n2"],
+                       surf, indoor, svpt * .5, S.MATCHES)
+        b = M.estimate(S.PLAYERS, S.META, S.CALIB, e["n2"], e["n1"],
+                       surf, indoor, svpt * .5, S.MATCHES)
+    except Exception:
+        return None
+    if not (a["known"] and b["known"]):
+        return None
+    # Osobno dla kazdego zawodnika — suma mowi mniej, bo to zwykle rynek
+    # na konkretnego gracza sie obstawia.
+    return {"a1": a["mu_ace"], "a2": b["mu_ace"],
+            "d1": a["mu_df"], "d2": b["mu_df"]}
+
+
 def render_row(e):
-    c_name, c_meta, c_btn = st.columns([6, 3, 2])
+    """
+    Uklad: nazwiska (klikalne) | prognoza asow i DF | czas po prawej.
+    Caly wiersz reaguje na najechanie.
+    """
+    # Dymek ma mowic, KTOREGO zawodnika dotyczy problem — samo
+    # "niepelne dane" nie pozwala ocenic, czy warto wchodzic w mecz.
+    znaki = []
+    for surowe, dopasowane, pewnosc in ((e["p1"], e["m1"], e.get("c1")),
+                                        (e["p2"], e["m2"], e.get("c2"))):
+        if not dopasowane:
+            znaki.append(f"{surowe} — nie ma w bazie ATP Tour")
+        elif pewnosc is not None and pewnosc < 0.9:
+            znaki.append(f"{surowe} — rozpoznany jako {dopasowane} "
+                         f"({100 * pewnosc:.0f}% pewności)")
+
     n1 = e["n1"] + ("" if e["m1"] else " ⚠")
     n2 = e["n2"] + ("" if e["m2"] else " ⚠")
-    c_name.markdown(f"**{n1}** vs **{n2}**")
 
-    bits = [e.get("court", ""), (e.get("start") or "")[:16].replace("T", " ")]
-    c_meta.caption(" · ".join(b for b in bits if b) or "—")
-    notes = []
-    if e["known"] < 2:
-        notes.append("brak danych o 1 zawodniku")
-    if e["conf"] < 0.9:
-        notes.append("dopasowanie przybliżone")
-    if notes:
-        c_meta.caption("⚠ " + ", ".join(notes))
+    start = e.get("start") or ""
+    dzien = start[8:10] + "." + start[5:7] if len(start) >= 10 else ""
+    godz = start[11:16]
+    kort = e.get("court", "")
 
-    if c_btn.button("Analizuj", key=f"go_{e['id']}", use_container_width=True):
+    c_btn, c_prog, c_meta = st.columns([6, 3, 3])
+    if c_btn.button(f"{n1}  vs  {n2}", key=f"go_{e['id']}",
+                    use_container_width=True,
+                    help="; ".join(znaki) if znaki else None):
         surf, indoor = surface_from_court(e.get("court", ""))
         bo, why = infer_best_of(e.get("tournament", ""), e.get("rank_name", ""))
         open_match(e["n1"], e["n2"],
@@ -243,3 +307,32 @@ def render_row(e):
                     "best_of_why": why, "tournament": e.get("tournament", ""),
                     "rank_name": e.get("rank_name", ""),
                     "start": e.get("start", "")})
+
+    pr = _prognoza_wiersza(e)
+    if pr:
+        # Kolejnosc wierszy odpowiada kolejnosci nazwisk po lewej.
+        c_prog.markdown(
+            f"<div class='row-prog'>"
+            f"<span class='row-prog-l'>asy</span>"
+            f"<b>{pr['a1']:.0f}</b>"
+            f"<span class='row-prog-s'>·</span>"
+            f"<b>{pr['a2']:.0f}</b>"
+            f"<span class='row-prog-l' style='margin-left:.8rem'>df</span>"
+            f"<b>{pr['d1']:.0f}</b>"
+            f"<span class='row-prog-s'>·</span>"
+            f"<b>{pr['d2']:.0f}</b>"
+            f"</div>", unsafe_allow_html=True)
+    else:
+        c_prog.markdown("<div class='row-prog' style='opacity:.45'>—</div>",
+                        unsafe_allow_html=True)
+
+    # Ikona ostrzezenia przed godzina. Tresc trafia do `help` przycisku,
+    # bo atrybut `title` w HTML wstrzykiwanym przez st.markdown nie
+    # generuje podpowiedzi — Streamlit go pomija.
+    ostrz = "<span class='row-warn'>⚠</span>" if znaki else ""
+    c_meta.markdown(
+        f"<div class='row-meta'>{ostrz}<b>{godz}</b>"
+        + (f" <span style='opacity:.6'>{dzien}</span>" if dzien else "")
+        + (f"<div style='opacity:.7;font-size:.74rem'>{kort}</div>"
+           if kort else "")
+        + "</div>", unsafe_allow_html=True)
