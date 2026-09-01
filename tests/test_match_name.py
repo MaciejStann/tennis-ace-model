@@ -32,6 +32,15 @@ class TestFormatyZapisu:
     def test_male_litery(self, names):
         assert _m("alexander bublik", names) == "Alexander Bublik"
 
+    def test_pelne_nazwisko_z_drugim_czlonem(self, names):
+        """Flashscore podaje 'Alcaraz Garfia Carlos' — nadmiarowy człon."""
+        assert _m("Alcaraz Garfia Carlos", names) == "Carlos Alcaraz"
+
+    def test_kolejnosc_nazwisko_imie(self, names):
+        """Flashscore zapisuje slug jako nazwisko-imię."""
+        assert _m("Fritz Taylor", names) == "Taylor Fritz"
+        assert _m("Musetti Lorenzo", names) == "Lorenzo Musetti"
+
     def test_czlon_nazwiska_malymi(self, names):
         assert _m("Alex De Minaur", names) == "Alex de Minaur"
 
