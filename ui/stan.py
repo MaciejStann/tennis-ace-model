@@ -25,8 +25,21 @@ def _load():
 
 
 @st.cache_data(show_spinner="Przygotowuje model meczu...")
-def load_point():
+def _load_point_cached(znacznik: str):
+    """
+    Cache po znaczniku bazy, nie po globalnej MATCHES. Wczesniej funkcja
+    czytala globalna zmienna w momencie wywolania przez cache Streamlita,
+    kiedy ta mogla byc jeszcze None — na Streamlit Cloud konczylo sie to
+    AttributeError.
+    """
     return M.load_point_rates(MATCHES)
+
+
+def load_point():
+    if MATCHES is None:
+        return None, None
+    znacznik = f"{len(MATCHES)}|{int(MATCHES.tourney_date.max())}"
+    return _load_point_cached(znacznik)
 
 
 @st.cache_data(show_spinner=False)

@@ -363,7 +363,14 @@ def match_tab(p1: str, p2: str, cfg: dict, mkey: str):
     """Przebieg meczu: zwyciezca, wynik w setach, tie-breaki, gemy."""
     import pointmodel as PM
 
-    rates, pmeta = S.load_point()
+    try:
+        rates, pmeta = S.load_point()
+    except Exception as exc:
+        st.error("Nie udało się przygotować modelu meczu.")
+        st.caption(f"{type(exc).__name__}: {exc}")
+        st.caption("Zwykle znaczy to, że baza nie ma kolumn serwisowych. "
+                   "Uruchom: python migrate_serve.py")
+        return
     if rates is None:
         st.info("Brak danych o punktach serwisowych. Uruchom:")
         st.code("python migrate_serve.py\npython rebuild_from_slim.py",
