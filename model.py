@@ -374,6 +374,63 @@ def h2h_totals(matches, p1: str, p2: str) -> tuple[pd.DataFrame, int]:
     return f.reset_index(), n
 
 
+def last_results(matches, name: str, metric: str, n: int = 10,
+                 surface: str | None = None) -> list[dict]:
+    """
+    Ostatnie n wystepow zawodnika z surowa wartoscia metryki.
+    Sluzy do pokazania, jak czesto przekraczal zadana linie — element
+    OPISOWY. Model tego nie uzywa: sprawdzono, ze serie pokryc nie
+    przewiduja kolejnego meczu (efekt znika po kontroli na zawodnika).
+    """
+    if matches is None:
+        return []
+    sub = matches[matches.player == name]
+    if surface:
+        sub = sub[sub.surface == surface]
+    if sub.empty:
+        return []
+    sub = sub.sort_values("tourney_date").tail(n)
+    out = []
+    for r in sub.itertuples():
+        d = str(int(r.tourney_date))
+        out.append({
+            "date": int(r.tourney_date),
+            "date_str": f"{d[6:]}.{d[4:6]}.{d[:4]}",
+            "opp": str(r.opp),
+            "surface": str(r.surface),
+            "value": float(getattr(r, metric)),
+            "svgms": float(r.svgms),
+        })
+    return list(reversed(out))
+
+
+def total_games_history(matches, p1: str, p2: str, n: int = 10) -> list[dict]:
+    """
+    Laczna liczba gemow w ostatnich meczach obu zawodnikow (osobno).
+    W formacie long gemy jednego zawodnika to polowa meczu, wiec laczna
+    liczba wymaga sparowania z przeciwnikiem — robimy to po dacie i parze.
+    """
+    if matches is None:
+        return []
+    out = []
+    for name in (p1, p2):
+        sub = matches[matches.player == name].sort_values("tourney_date").tail(n)
+        for r in sub.itertuples():
+            opp_rows = matches[(matches.player == r.opp)
+                               & (matches.opp == name)
+                               & (matches.tourney_date == r.tourney_date)]
+            if opp_rows.empty:
+                continue
+            d = str(int(r.tourney_date))
+            out.append({
+                "player": name, "opp": str(r.opp),
+                "date": int(r.tourney_date),
+                "date_str": f"{d[6:]}.{d[4:6]}.{d[:4]}",
+                "total": float(r.svgms) + float(opp_rows.iloc[0].svgms),
+            })
+    return sorted(out, key=lambda x: x["date"], reverse=True)
+
+
 def recent_form(matches, name: str, n: int = 10,
                 surface: str | None = None) -> pd.DataFrame:
     if matches is None:

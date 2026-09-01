@@ -611,7 +611,7 @@ def sidebar_detail(ctx: dict, mkey: str) -> dict:
 
 
 def market_block(mu: float, key: str, r: float, bankroll: float,
-                 kfrac: float):
+                 kfrac: float, mkey_for_sens: str = ""):
     """Linia, kursy, EV, Kelly i rozkład dla jednego rynku."""
     c = st.columns(3, gap="medium")
     raw_line = c[0].number_input(
@@ -688,6 +688,54 @@ def market_block(mu: float, key: str, r: float, bankroll: float,
             unsafe_allow_html=True)
     st.write("")
 
+    with st.expander("Co jeśli mecz potrwa inaczej"):
+        st.markdown(
+            "<div class='sub'>Długość meczu to największa niewiadoma: "
+            "w danych łączna liczba gemów ma odchylenie <b>8,4 przy średniej "
+            "25</b>, a siła zawodników prawie tego nie przewiduje. Poniżej "
+            "widać, jak prognoza i wycena zmieniają się, gdy mecz okaże się "
+            "krótszy lub dłuższy niż zakładasz.</div>",
+            unsafe_allow_html=True)
+        st.write("")
+        base_g = st.session_state.get(f"games_{mkey_for_sens}", 22.8)
+        rows = []
+        for delta, lab in ((-6, "bardzo krótki"), (-3, "krótszy"),
+                           (0, "jak ustawiłeś"), (3, "dłuższy"),
+                           (6, "bardzo długi")):
+            g = base_g + delta
+            if g < 10:
+                continue
+            mu_g = mu * g / base_g
+            po_g = M.p_over(line, mu_g, r)
+            ev_ov = po_g * o_ov - 1
+            ev_un = (1 - po_g) * o_un - 1
+            best_side = "OVER" if ev_ov >= ev_un else "UNDER"
+            best_ev = max(ev_ov, ev_un)
+            rows.append({
+                "Gemy": f"{g:.1f}",
+                "Scenariusz": lab,
+                "Prognoza": f"{mu_g:.1f}",
+                f"P(over {line:g})": f"{100 * po_g:.0f}%",
+                "Lepsza strona": best_side,
+                "EV": f"{100 * best_ev:+.1f}%",
+            })
+        st.dataframe(pd.DataFrame(rows), hide_index=True,
+                     use_container_width=True)
+        sides = {r_["Lepsza strona"] for r_ in rows}
+        if len(sides) > 1:
+            st.markdown(
+                f"<div class='sub' style='color:{BAD}'><b>Uwaga:</b> przy "
+                f"innej długości meczu opłacalna strona się zmienia. "
+                f"Ten zakład jest wrażliwy na długość — bez linii bukmachera "
+                f"na total gemów lepiej odpuścić.</div>",
+                unsafe_allow_html=True)
+        else:
+            st.markdown(
+                f"<div class='sub' style='color:{GOOD}'>Ta sama strona "
+                f"wygrywa w każdym scenariuszu — wycena jest odporna na "
+                f"niepewność co do długości meczu.</div>",
+                unsafe_allow_html=True)
+
     with st.expander("Rozkład prawdopodobieństwa"):
         rr, pp = M.nb(mu, r)
         xs = np.arange(0, int(mu * 2.5) + 6)
@@ -741,7 +789,7 @@ def stat_tab(kind: str, p1: str, p2: str, e1: dict, e2: dict, cfg: dict,
     # przy wartosci z poprzedniego rynku, mimo ze mu jest inne.
     slot = list(opts).index(choice)
     market_block(opts[choice], f"{kind}_{slot}_{mkey}", r, cfg["bankroll"],
-                 cfg["kfrac"])
+                 cfg["kfrac"], mkey)
 
     known = [(nm, e) for nm, e in ((p1, e1), (p2, e2)) if e["known"]]
     with st.expander("Skąd się bierze ta liczba"):
@@ -803,6 +851,11 @@ def stat_tab(kind: str, p1: str, p2: str, e1: dict, e2: dict, cfg: dict,
                 st.caption("Forma nie jest brana pod uwagę. Uruchom "
                            "`python oos_check.py`, żeby sprawdzić, czy "
                            "pomogłaby na twoich danych.")
+
+
+def surface_of(cfg: dict) -> str:
+    return {"Hard": "hard", "Clay": "mączka", "Grass": "trawa"}.get(
+        cfg["surface"], cfg["surface"].lower())
 
 
 def h2h_tab(p1: str, p2: str, e1: dict, e2: dict, cfg: dict, mkey: str):
@@ -908,6 +961,54 @@ def h2h_tab(p1: str, p2: str, e1: dict, e2: dict, cfg: dict, mkey: str):
                         for _, r in totals.iterrows())
                     col.markdown(f"<div class='card'><b>{nm}</b>{rows}</div>",
                                  unsafe_allow_html=True)
+
+    st.divider()
+    st.markdown("<div class='eyebrow'>Jak często przekraczali linię</div>",
+                unsafe_allow_html=True)
+    st.markdown(
+        "<div class='sub'>Element informacyjny — <b>model tego nie używa</b>. "
+        "Sprawdziłem na danych: seria pokryć nie przewiduje kolejnego meczu. "
+        "Efekt, który wygląda na passę, znika po uwzględnieniu tego, że model "
+        "systematycznie zaniża albo zawyża konkretnych zawodników.</div>",
+        unsafe_allow_html=True)
+    st.write("")
+
+    c = st.columns([2, 2, 3])
+    metric_lab = c[0].radio("Metryka", ["Asy", "Podwójne błędy"],
+                            horizontal=True, key=f"srmet_{mkey}",
+                            label_visibility="collapsed")
+    metric = "ace" if metric_lab == "Asy" else "df"
+    win_n = c[1].radio("Okno", [5, 10, 20], horizontal=True,
+                       key=f"srwin_{mkey}", label_visibility="collapsed",
+                       format_func=lambda n: f"ost. {n}")
+    only_surf = c[2].checkbox(f"Tylko {surface_of(cfg)}", key=f"srsurf_{mkey}")
+
+    for nm, e in ((p1, e1), (p2, e2)):
+        if not e["known"]:
+            continue
+        res = M.last_results(MATCHES, nm, metric, win_n,
+                             cfg["surface"] if only_surf else None)
+        if not res:
+            st.caption(f"{nm}: brak meczów w bazie.")
+            continue
+        # linia domyslna: tam, gdzie ustawilby ja bukmacher dla tego zawodnika
+        mu_p = e["mu_ace"] if metric == "ace" else e["mu_df"]
+        line_p = float(np.floor(mu_p) + 0.5)
+        hits = sum(1 for x in res if x["value"] > line_p)
+        vals = " ".join(
+            f"<span style='color:{GOOD if x['value'] > line_p else INK};"
+            f"font-weight:600'>{x['value']:.0f}</span>" for x in res)
+        st.markdown(
+            f"<div class='card'>"
+            f"<div class='row'><b>{nm}</b>"
+            f"<span>powyżej {line_p:g} w <b>{hits}</b> z {len(res)}</span>"
+            f"</div>"
+            f"<div class='sub' style='margin-top:.45rem;font-size:1rem;"
+            f"letter-spacing:.08em'>{vals}</div>"
+            f"<div class='sub' style='margin-top:.35rem'>"
+            f"najnowsze po lewej · {res[-1]['date_str']} – "
+            f"{res[0]['date_str']}</div></div>",
+            unsafe_allow_html=True)
 
     st.divider()
     st.markdown("<div class='eyebrow'>Forma — ostatnie mecze</div>",
